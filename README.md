@@ -16,10 +16,18 @@ A powerful, pure Node.js tool to verify **Telegram MTProto Proxies** by performi
 
 ## 🚀 Installation
 
-### Prerequisites
+### Option 1 — Download .exe (Windows, no Node.js needed)
+
+Grab `MTProto-Checker.exe` from [Releases](../../releases). Double-click to run.
+
+> Browser opens automatically at `http://localhost:3000`.
+
+### Option 2 — Run from source (requires Node.js)
+
+#### Prerequisites
 You need **Node.js** installed on your machine. [Download it here](https://nodejs.org/).
 
-### Steps
+#### Steps
 1.  Clone this repository:
     ```bash
     git clone https://github.com/rahgozar94725/MTProto-Checker.git
@@ -37,6 +45,17 @@ You need **Node.js** installed on your machine. [Download it here](https://nodej
     ```
 
 4.  The browser will open automatically at `http://localhost:3000`.
+
+### Build .exe yourself
+
+Requires Node.js 20+ on Windows.
+
+```bash
+npm install
+npm run build
+```
+
+Output: `dist/MTProto-Checker.exe` (~97 MB, standalone).
 
 ## 📖 How to Use
 
