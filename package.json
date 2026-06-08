@@ -9,9 +9,8 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
-    "body-parser": "^2.2.1",
     "express": "^5.2.1",
     "input": "^1.0.1",
     "open": "^11.0.0",

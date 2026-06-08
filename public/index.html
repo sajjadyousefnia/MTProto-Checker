@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MTProto Ultimate Checker</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="container">
+    <div class="header-controls">
+        <select id="langSelect" class="lang-select" onchange="changeLanguage(this.value)">
+            <option value="fa">🇮🇷 فارسی</option>
+            <option value="en">🇺🇸 English</option>
+        </select>
+    </div>
+
+    <div>
+        <h1 data-i18n="title">MTProto Pro Checker</h1>
+        <p class="sub" data-i18n="subtitle">تست اتصال</p>
+        
+        <div class="progress-box"><div class="progress-bar" id="progressBar"></div></div>
+        <div class="status-text" id="statusText" data-i18n="ready">آماده...</div>
+    </div>
+
+    <div class="grid">
+        <div>
+            <label data-i18n="inputLabel">📥 لیست ورودی</label>
+            <textarea id="inputProxies" placeholder="..."></textarea>
+            <button class="btn-start" id="startBtn" onclick="startCheck()" data-i18n="startBtn">شروع بررسی</button>
+        </div>
+        <div>
+            <label data-i18n="outputLabel">🚀 لیست سالم</label>
+            <textarea id="outputProxies" readonly placeholder="..."></textarea>
+            <button class="btn-copy" onclick="copyResults()" data-i18n="copyBtn">کپی لیست سالم</button>
+        </div>
+    </div>
+
+    <div class="debug-console" id="console">
+        > System Ready.
+    </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="/js/script.js"></script>
+</body>
+</html>
