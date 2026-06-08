@@ -4,7 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build:assets": "node build/generate-assets.mjs",
+    "build:bundle": "npx esbuild build/sea-entry.mjs --bundle --platform=node --outfile=dist/sea-bundle.cjs --format=cjs",
+    "build:exe": "node build/build-sea.mjs",
+    "build": "node build/build-sea.mjs"
   },
   "keywords": [],
   "author": "",
@@ -15,5 +19,9 @@
     "input": "^1.0.1",
     "open": "^11.0.0",
     "telegram": "^2.26.22"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "postject": "^1.0.0-alpha.6"
   }
 }
