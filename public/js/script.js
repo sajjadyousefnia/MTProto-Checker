@@ -192,7 +192,12 @@ async function startCheck() {
                 const result = await response.json();
 
                 if (result.ok) {
-                    workingProxies.push({ link: proxyData.original, ping: result.ping });
+                    const existing = workingProxies.find(p => p.link === proxyData.original);
+                    if (existing) {
+                        existing.ping = result.ping;
+                    } else {
+                        workingProxies.push({ link: proxyData.original, ping: result.ping });
+                    }
                     updateOutput();
                     log(`SUCCESS: ${proxyData.server} (${result.ping}ms)`);
                 }
@@ -201,18 +206,29 @@ async function startCheck() {
             } finally {
                 completed++;
                 updateUI(completed, total);
-                if (completed === total) finish();
             }
         };
 
         const batchSize = 10;
-        for (let i = 0; i < validLinks.length; i += batchSize) {
+        let i = 0;
+        while (i < validLinks.length) {
+            const end = Math.min(i + batchSize, validLinks.length);
+            const batch = validLinks.slice(i, end);
+            await Promise.all(batch.map(p => checkOne(p)));
+
             if (isPaused) {
                 await new Promise(resolve => { pauseResolve = resolve; });
+                const batchUrls = new Set(batch.map(p => p.original));
+                workingProxies = workingProxies.filter(p => !batchUrls.has(p.link));
+                completed -= batch.length;
+                updateUI(completed, total);
+                updateOutput();
+                continue;
             }
-            const batch = validLinks.slice(i, i + batchSize);
-            await Promise.all(batch.map(p => checkOne(p)));
+
+            i = end;
         }
+        finish();
     } catch (e) {
         log(`MAIN ERROR: ${e.message}`, true);
         alert(translations[currentLang].errorGeneric);
