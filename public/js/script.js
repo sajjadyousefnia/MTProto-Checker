@@ -16,7 +16,8 @@ const translations = {
         toastNoValid: "⛔ هیچ لینک معتبری یافت نشد!",
         toastNoWorking: "😔 هیچ پروکسی سالمی پیدا نشد.",
         toastFound: "🎉 {n} پروکسی سالم پیدا شد!",
-        errorGeneric: "خطایی رخ داد. کنسول را چک کنید."
+        errorGeneric: "خطایی رخ داد. کنسول را چک کنید.",
+        soundLabel: "🔔 اعلام پایان کار"
     },
     en: {
         title: "MTProto Pro Checker",
@@ -35,7 +36,8 @@ const translations = {
         toastNoValid: "⛔ No valid links found!",
         toastNoWorking: "😔 No working proxies found.",
         toastFound: "🎉 Found {n} working proxies!",
-        errorGeneric: "An error occurred. Check console."
+        errorGeneric: "An error occurred. Check console.",
+        soundLabel: "🔔 Notify on finish"
     }
 };
 
@@ -213,6 +215,7 @@ function finish() {
     
     if (workingProxies.length > 0) {
         showToast(t.toastFound.replace('{n}', workingProxies.length));
+        if (document.getElementById('soundCheck').checked) beep();
     } else {
         showToast(t.toastNoWorking, true);
     }
@@ -256,3 +259,27 @@ function showToast(message, isError = false) {
     toast.className = "toast show";
     setTimeout(() => { toast.className = toast.className.replace("show", ""); }, 3000);
 }
+
+function beep() {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        const now = ctx.currentTime;
+        osc.frequency.setValueAtTime(660, now);
+        osc.frequency.setValueAtTime(880, now + 0.15);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
+        osc.start(now);
+        osc.stop(now + 0.6);
+    } catch (e) { /* audio not available */ }
+}
+
+const soundCheck = document.getElementById('soundCheck');
+if (localStorage.getItem('soundEnabled') === 'true') soundCheck.checked = true;
+soundCheck.addEventListener('change', () => {
+    localStorage.setItem('soundEnabled', soundCheck.checked);
+});

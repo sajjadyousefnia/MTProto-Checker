@@ -38,6 +38,7 @@ Bundle Node.js MTProto Checker into single Windows .exe, zero runtime deps.
 | V5 | GramJS native deps (websocket, bufferutil) work inside bundle |
 | V6 | Build reproducibility: same commit → same .exe hash |
 | V7 | ∀ proxy input → deduplicate by `server:port:secret` before dispatch to /check |
+| V8 | ∀ check completion → play notification sound if user opted in (checkbox in UI, persisted in localStorage) |
 
 ## §T — Tasks
 
