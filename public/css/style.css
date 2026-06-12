@@ -77,16 +77,36 @@ select.lang-select {
     align-items: center;
     gap: 4px;
     cursor: pointer;
-    font-size: 14px;
-    margin-right: 8px;
+    margin-right: 12px;
+    user-select: none;
 }
 .sound-toggle input { display: none; }
-.sound-toggle span {
-    opacity: 0.4;
-    transition: opacity 0.2s;
+.sound-icon {
     font-size: 16px;
+    transition: all 0.3s;
+    filter: grayscale(1) brightness(0.5);
 }
-.sound-toggle input:checked + span { opacity: 1; }
+.sound-toggle input:checked + .sound-icon {
+    filter: none;
+    text-shadow: 0 0 6px var(--accent);
+}
+.sound-state {
+    font-size: 10px;
+    font-weight: bold;
+    padding: 1px 5px;
+    border-radius: 4px;
+    transition: all 0.3s;
+    font-family: var(--font-en);
+}
+.sound-state.off {
+    color: #64748b;
+    background: #1e293b;
+}
+.sound-state.on {
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.15);
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.3);
+}
 
 html[dir="ltr"] select.lang-select {
     background-position: right 10px center;

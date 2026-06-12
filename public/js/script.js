@@ -16,8 +16,7 @@ const translations = {
         toastNoValid: "⛔ هیچ لینک معتبری یافت نشد!",
         toastNoWorking: "😔 هیچ پروکسی سالمی پیدا نشد.",
         toastFound: "🎉 {n} پروکسی سالم پیدا شد!",
-        errorGeneric: "خطایی رخ داد. کنسول را چک کنید.",
-        soundLabel: "🔔 اعلام پایان کار"
+        errorGeneric: "خطایی رخ داد. کنسول را چک کنید."
     },
     en: {
         title: "MTProto Pro Checker",
@@ -36,8 +35,7 @@ const translations = {
         toastNoValid: "⛔ No valid links found!",
         toastNoWorking: "😔 No working proxies found.",
         toastFound: "🎉 Found {n} working proxies!",
-        errorGeneric: "An error occurred. Check console.",
-        soundLabel: "🔔 Notify on finish"
+        errorGeneric: "An error occurred. Check console."
     }
 };
 
@@ -278,8 +276,19 @@ function beep() {
     } catch (e) { /* audio not available */ }
 }
 
+function syncSoundUI() {
+    const el = document.getElementById('soundState');
+    const on = document.getElementById('soundCheck').checked;
+    el.textContent = on ? 'ON' : 'OFF';
+    el.className = 'sound-state ' + (on ? 'on' : 'off');
+}
+
 const soundCheck = document.getElementById('soundCheck');
-if (localStorage.getItem('soundEnabled') === 'true') soundCheck.checked = true;
-soundCheck.addEventListener('change', () => {
-    localStorage.setItem('soundEnabled', soundCheck.checked);
-});
+if (soundCheck) {
+    if (localStorage.getItem('soundEnabled') === 'true') soundCheck.checked = true;
+    syncSoundUI();
+    soundCheck.addEventListener('change', () => {
+        localStorage.setItem('soundEnabled', soundCheck.checked);
+        syncSoundUI();
+    });
+}

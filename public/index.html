@@ -10,9 +10,10 @@
 
 <div class="container">
     <div class="header-controls">
-        <label class="sound-toggle" data-i18n="soundLabel" title="Sound on finish">
+        <label class="sound-toggle" title="Sound on finish">
             <input type="checkbox" id="soundCheck">
-            <span>🔔</span>
+            <span class="sound-icon">🔔</span>
+            <span class="sound-state" id="soundState">OFF</span>
         </label>
         <select id="langSelect" class="lang-select" onchange="changeLanguage(this.value)">
             <option value="fa">🇮🇷 فارسی</option>
