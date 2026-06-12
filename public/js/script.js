@@ -6,6 +6,8 @@ const translations = {
         inputLabel: "📥 لیست ورودی (کثیف و نامرتب)",
         inputPlaceholder: "لینکهای پروکسی را اینجا وارد کنید (هر خط یک لینک)...",
         startBtn: "شروع بررسی",
+        pauseBtn: "⏸ توقف موقت",
+        resumeBtn: "▶ ادامه",
         outputLabel: "🚀 لیست ۱۰۰٪ سالم",
         outputPlaceholder: "نتایج سالم اینجا نمایش داده میشوند...",
         copyBtn: "کپی کردن لیست سالم",
@@ -25,6 +27,8 @@ const translations = {
         inputLabel: "📥 Input List (Mixed/Dirty)",
         inputPlaceholder: "Paste proxy links here (one per line)...",
         startBtn: "Start Check",
+        pauseBtn: "⏸ Pause",
+        resumeBtn: "▶ Resume",
         outputLabel: "🚀 Working Proxies (100%)",
         outputPlaceholder: "Working proxies will appear here...",
         copyBtn: "Copy Working List",
@@ -58,8 +62,17 @@ function setLanguage(lang) {
     document.getElementById('outputProxies').placeholder = translations[lang].outputPlaceholder;
 }
 
+function updatePauseBtn() {
+    const btn = document.getElementById('pauseBtn');
+    if (!btn) return;
+    const t = translations[currentLang];
+    btn.textContent = isPaused ? t.resumeBtn : t.pauseBtn;
+    btn.className = 'btn-pause' + (isPaused ? ' resume' : '');
+}
+
 function changeLanguage(lang) {
     setLanguage(lang);
+    updatePauseBtn();
 }
 
 setLanguage(currentLang);
@@ -79,6 +92,8 @@ window.onerror = function(message) {
 
 let workingProxies = [];
 let skippedCount = 0;
+let isPaused = false;
+let pauseResolve = null;
 
 function parseLink(link) {
     try {
@@ -104,12 +119,25 @@ function parseLink(link) {
     } catch (e) { return null; }
 }
 
+function togglePause() {
+    isPaused = !isPaused;
+    if (!isPaused && pauseResolve) {
+        pauseResolve();
+        pauseResolve = null;
+    }
+    updatePauseBtn();
+    log(isPaused ? 'PAUSED' : 'RESUMED');
+}
+
 async function startCheck() {
     try {
         const t = translations[currentLang];
         const input = document.getElementById('inputProxies').value;
         
         if (!input) return showToast(t.toastEmpty, true);
+
+        isPaused = false;
+        pauseResolve = null;
 
         const lines = input.split('\n');
         skippedCount = 0;
@@ -138,8 +166,11 @@ async function startCheck() {
         document.getElementById('outputProxies').value = '';
         
         const startBtn = document.getElementById('startBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
         startBtn.disabled = true;
         startBtn.innerText = t.processing;
+        updatePauseBtn();
+        pauseBtn.style.display = '';
 
         let completed = 0;
         const total = validLinks.length;
@@ -176,6 +207,9 @@ async function startCheck() {
 
         const batchSize = 10;
         for (let i = 0; i < validLinks.length; i += batchSize) {
+            if (isPaused) {
+                await new Promise(resolve => { pauseResolve = resolve; });
+            }
             const batch = validLinks.slice(i, i + batchSize);
             await Promise.all(batch.map(p => checkOne(p)));
         }
@@ -183,6 +217,7 @@ async function startCheck() {
         log(`MAIN ERROR: ${e.message}`, true);
         alert(translations[currentLang].errorGeneric);
         document.getElementById('startBtn').disabled = false;
+        document.getElementById('pauseBtn').style.display = 'none';
     }
 }
 
@@ -207,8 +242,11 @@ function updateOutput() {
 function finish() {
     const t = translations[currentLang];
     const startBtn = document.getElementById('startBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
     startBtn.disabled = false;
     startBtn.innerText = t.startBtn;
+    pauseBtn.style.display = 'none';
+    isPaused = false;
     log('Process finished.');
     
     if (workingProxies.length > 0) {

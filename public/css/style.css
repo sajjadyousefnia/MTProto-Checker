@@ -151,6 +151,11 @@ button {
 .btn-copy { background-color: var(--success); }
 .btn-copy:hover { background-color: #059669; }
 
+.btn-pause { background-color: #f59e0b; }
+.btn-pause:hover { background-color: #d97706; }
+.btn-pause.resume { background-color: var(--success); }
+.btn-pause.resume:hover { background-color: #059669; }
+
 .debug-console {
     background: black; color: #00ff00; font-family: monospace; font-size: 11px;
     padding: 10px; height: 80px; overflow-y: auto; border-radius: 8px;
