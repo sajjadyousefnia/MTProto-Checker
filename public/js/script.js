@@ -113,7 +113,18 @@ async function startCheck() {
 
         const lines = input.split('\n');
         skippedCount = 0;
-        const validLinks = lines.map(parseLink).filter(l => l !== null);
+        let validLinks = lines.map(parseLink).filter(l => l !== null);
+
+        const seen = new Set();
+        const deduped = validLinks.filter(p => {
+            const key = `${p.server}:${p.port}:${p.secret}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+        const dupCount = validLinks.length - deduped.length;
+        if (dupCount > 0) log(`Removed ${dupCount} duplicate entries.`);
+        validLinks = deduped;
 
         if (validLinks.length === 0) {
             showToast(t.toastNoValid, true);

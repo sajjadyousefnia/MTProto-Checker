@@ -37,6 +37,7 @@ Bundle Node.js MTProto Checker into single Windows .exe, zero runtime deps.
 | V4 | .exe exits cleanly on Ctrl+C (no orphan node process) |
 | V5 | GramJS native deps (websocket, bufferutil) work inside bundle |
 | V6 | Build reproducibility: same commit → same .exe hash |
+| V7 | ∀ proxy input → deduplicate by `server:port:secret` before dispatch to /check |
 
 ## §T — Tasks
 
@@ -54,3 +55,4 @@ Bundle Node.js MTProto Checker into single Windows .exe, zero runtime deps.
 
 | id | date | cause | fix |
 |----|------|-------|-----|
+| B1 | 2026-06-12 | duplicate proxy entries not eliminated before dispatch | V7 |
