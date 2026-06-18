@@ -33,13 +33,22 @@
         <div>
             <label data-i18n="inputLabel">📥 لیست ورودی</label>
             <textarea id="inputProxies" placeholder="..."></textarea>
-            <button class="btn-start" id="startBtn" onclick="startCheck()" data-i18n="startBtn">شروع بررسی</button>
-            <button class="btn-pause" id="pauseBtn" onclick="togglePause()" style="display:none">⏸ توقف موقت</button>
+            <div class="btn-row">
+                <button class="btn-start" id="startBtn" onclick="startCheck()" data-i18n="startBtn">شروع بررسی</button>
+                <button class="btn-pause" id="pauseBtn" onclick="togglePause()" style="display:none">⏸ توقف موقت</button>
+                <label class="btn-file" data-i18n="fileBtn">📎 فایل
+                    <input type="file" id="fileInput" accept=".txt,.csv,.list" onchange="handleFileUpload(event)" style="display:none">
+                </label>
+            </div>
         </div>
         <div>
             <label data-i18n="outputLabel">🚀 لیست سالم</label>
             <textarea id="outputProxies" readonly placeholder="..."></textarea>
-            <button class="btn-copy" onclick="copyResults()" data-i18n="copyBtn">کپی لیست سالم</button>
+            <div class="btn-row">
+                <button class="btn-copy" onclick="copyResults()" data-i18n="copyBtn">کپی لیست سالم</button>
+                <button class="btn-export" onclick="exportResults('txt')" data-i18n="exportTxtBtn">💾 TXT</button>
+                <button class="btn-export" onclick="exportResults('json')" data-i18n="exportJsonBtn">💾 JSON</button>
+            </div>
         </div>
     </div>
 

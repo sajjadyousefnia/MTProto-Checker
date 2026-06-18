@@ -18,7 +18,11 @@ const translations = {
         toastNoValid: "⛔ هیچ لینک معتبری یافت نشد!",
         toastNoWorking: "😔 هیچ پروکسی سالمی پیدا نشد.",
         toastFound: "🎉 {n} پروکسی سالم پیدا شد!",
-        errorGeneric: "خطایی رخ داد. کنسول را چک کنید."
+        errorGeneric: "خطایی رخ داد. کنسول را چک کنید.",
+        fileBtn: "📎 فایل",
+        exportTxtBtn: "💾 TXT",
+        exportJsonBtn: "💾 JSON",
+        toastExported: "✅ فایل دانلود شد!"
     },
     en: {
         title: "MTProto Pro Checker",
@@ -39,7 +43,11 @@ const translations = {
         toastNoValid: "⛔ No valid links found!",
         toastNoWorking: "😔 No working proxies found.",
         toastFound: "🎉 Found {n} working proxies!",
-        errorGeneric: "An error occurred. Check console."
+        errorGeneric: "An error occurred. Check console.",
+        fileBtn: "📎 File",
+        exportTxtBtn: "💾 TXT",
+        exportJsonBtn: "💾 JSON",
+        toastExported: "✅ File downloaded!"
     }
 };
 
@@ -77,12 +85,17 @@ function changeLanguage(lang) {
 
 setLanguage(currentLang);
 
+const MAX_LOG_LINES = 200;
+
 function log(msg, isError = false) {
     const c = document.getElementById('console');
     const line = document.createElement('div');
     line.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
     if (isError) line.className = 'error-log';
     c.appendChild(line);
+    while (c.children.length > MAX_LOG_LINES) {
+        c.removeChild(c.firstChild);
+    }
     c.scrollTop = c.scrollHeight;
 }
 
@@ -202,7 +215,9 @@ async function startCheck() {
                     log(`SUCCESS: ${proxyData.server} (${result.ping}ms)`);
                 }
             } catch (err) {
-                // Ignore
+                if (err.name !== 'AbortError') {
+                    log(`FAIL: ${proxyData.server} - ${err.message}`, true);
+                }
             } finally {
                 completed++;
                 updateUI(completed, total);
@@ -218,11 +233,6 @@ async function startCheck() {
 
             if (isPaused) {
                 await new Promise(resolve => { pauseResolve = resolve; });
-                const batchUrls = new Set(batch.map(p => p.original));
-                workingProxies = workingProxies.filter(p => !batchUrls.has(p.link));
-                completed -= batch.length;
-                updateUI(completed, total);
-                updateOutput();
                 continue;
             }
 
@@ -335,6 +345,49 @@ function syncSoundUI() {
     const on = document.getElementById('soundCheck').checked;
     el.textContent = on ? 'ON' : 'OFF';
     el.className = 'sound-state ' + (on ? 'on' : 'off');
+}
+
+function handleFileUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        document.getElementById('inputProxies').value = e.target.result;
+        log(`Loaded file: ${file.name} (${(file.size / 1024).toFixed(1)}KB)`);
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+}
+
+function exportResults(format) {
+    const text = document.getElementById('outputProxies').value;
+    if (!text) return showToast(translations[currentLang].toastEmpty, true);
+
+    let content, filename, type;
+    if (format === 'json') {
+        const lines = text.split('\n\n').filter(l => l.trim());
+        const data = lines.map(line => {
+            const match = line.match(/(.+?)\s*#\s*Ping:\s*(\d+)ms/);
+            return match ? { link: match[1].trim(), ping: parseInt(match[2]) } : { link: line.trim(), ping: null };
+        });
+        content = JSON.stringify(data, null, 2);
+        filename = 'proxies.json';
+        type = 'application/json';
+    } else {
+        content = text;
+        filename = 'proxies.txt';
+        type = 'text/plain';
+    }
+
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(translations[currentLang].toastExported || 'Exported!');
 }
 
 const soundCheck = document.getElementById('soundCheck');

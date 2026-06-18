@@ -156,6 +156,38 @@ button {
 .btn-pause.resume { background-color: var(--success); }
 .btn-pause.resume:hover { background-color: #059669; }
 
+.btn-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+.btn-row button, .btn-row .btn-file {
+    flex: 1;
+    margin-top: 0;
+}
+
+.btn-file {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px;
+    background-color: #6366f1;
+    color: white;
+    border-radius: 10px;
+    font-weight: bold;
+    font-size: 15px;
+    cursor: pointer;
+    transition: 0.2s;
+    font-family: inherit;
+    text-align: center;
+}
+.btn-file:hover { background-color: #4f46e5; }
+
+.btn-export {
+    background-color: #8b5cf6;
+}
+.btn-export:hover { background-color: #7c3aed; }
+
 .debug-console {
     background: black; color: #00ff00; font-family: monospace; font-size: 11px;
     padding: 10px; height: 80px; overflow-y: auto; border-radius: 8px;

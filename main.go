@@ -9,11 +9,9 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -24,55 +22,26 @@ import (
 )
 
 const (
-	defaultPort = 3000
-	testAppID   = 6
-	testAppHash = "eb06d4abfb49dc3eeb1aeb98ae0f581e"
+	defaultPort     = 3000
+	testAppID       = 6
+	testAppHash     = "eb06d4abfb49dc3eeb1aeb98ae0f581e"
+	maxBodySize     = 50 * 1024 * 1024 // 50MB
+	maxConcurrency  = 50
+	defaultTimeout  = 8 * time.Second
+	shutdownTimeout = 5 * time.Second
 )
 
-// CheckRequest represents the JSON body of POST /check
 type CheckRequest struct {
 	Server string `json:"server"`
 	Port   int    `json:"port"`
 	Secret string `json:"secret"`
 }
 
-// CheckResponse represents the JSON response from POST /check
 type CheckResponse struct {
 	OK   bool  `json:"ok"`
 	Ping int64 `json:"ping,omitempty"`
 }
 
-// parseProxyLink parses tg://proxy?server=...&port=...&secret=... links
-func parseProxyLink(link string) (server string, port int, secret string, err error) {
-	cleanLink := strings.TrimSpace(link)
-	cleanLink = strings.Replace(cleanLink, ".&", "&", 1)
-
-	u, err := url.Parse(cleanLink)
-	if err != nil {
-		return "", 0, "", errors.Wrap(err, "parse link")
-	}
-
-	q := u.Query()
-	server = q.Get("server")
-	portStr := q.Get("port")
-	secret = q.Get("secret")
-
-	if server == "" || portStr == "" || secret == "" {
-		return "", 0, "", errors.New("missing server, port, or secret")
-	}
-
-	var p int
-	if _, err := fmt.Sscanf(portStr, "%d", &p); err != nil {
-		return "", 0, "", errors.Wrap(err, "parse port")
-	}
-	if p <= 0 || p > 65535 {
-		return "", 0, "", errors.Errorf("invalid port %d", p)
-	}
-
-	return server, p, secret, nil
-}
-
-// decodeSecret decodes hex or base64url secret
 func decodeSecret(s string) ([]byte, error) {
 	if b, err := hex.DecodeString(s); err == nil {
 		return b, nil
@@ -86,7 +55,6 @@ func decodeSecret(s string) ([]byte, error) {
 	return nil, errors.Errorf("unable to decode secret %q as hex or base64url", s)
 }
 
-// checkProxy performs a real MTProto handshake through the MTProxy
 func checkProxy(ctx context.Context, server string, port int, secret string) (int64, error) {
 	addr := net.JoinHostPort(server, fmt.Sprintf("%d", port))
 
@@ -105,7 +73,7 @@ func checkProxy(ctx context.Context, server string, port int, secret string) (in
 	})
 
 	var ping int64
-	checkCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	checkCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
 	err = client.Run(checkCtx, func(ctx context.Context) error {
@@ -124,7 +92,6 @@ func checkProxy(ctx context.Context, server string, port int, secret string) (in
 	return ping, nil
 }
 
-// concurrentLimiter limits concurrent proxy checks
 type concurrentLimiter struct {
 	sem chan struct{}
 }
@@ -136,28 +103,33 @@ func newLimiter(n int) *concurrentLimiter {
 func (l *concurrentLimiter) Acquire() { l.sem <- struct{}{} }
 func (l *concurrentLimiter) Release() { <-l.sem }
 
-// batchCheck checks multiple proxies concurrently with a limit
-func batchCheck(ctx context.Context, proxies []CheckRequest, limit int, onResult func(CheckRequest, CheckResponse)) {
+func batchCheck(ctx context.Context, proxies []CheckRequest, limit int, onResult func(int, CheckResponse)) {
 	limiter := newLimiter(limit)
 	var wg sync.WaitGroup
 
-	for _, p := range proxies {
+	for i, p := range proxies {
 		wg.Add(1)
-		go func(proxy CheckRequest) {
+		go func(idx int, proxy CheckRequest) {
 			defer wg.Done()
 			limiter.Acquire()
 			defer limiter.Release()
 
 			ping, err := checkProxy(ctx, proxy.Server, proxy.Port, proxy.Secret)
 			if err != nil {
-				onResult(proxy, CheckResponse{OK: false})
+				onResult(idx, CheckResponse{OK: false})
 			} else {
-				onResult(proxy, CheckResponse{OK: true, Ping: ping})
+				onResult(idx, CheckResponse{OK: true, Ping: ping})
 			}
-		}(p)
+		}(i, p)
 	}
 
 	wg.Wait()
+}
+
+func jsonResponse(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
 }
 
 func main() {
@@ -168,41 +140,44 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// POST /check — check a single proxy
 	mux.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
 		var req CheckRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(CheckResponse{OK: false})
+			jsonResponse(w, http.StatusBadRequest, CheckResponse{OK: false})
 			return
 		}
 
+		start := time.Now()
 		ping, err := checkProxy(r.Context(), req.Server, req.Port, req.Secret)
-		w.Header().Set("Content-Type", "application/json")
+		elapsed := time.Since(start)
+
 		if err != nil {
-			json.NewEncoder(w).Encode(CheckResponse{OK: false})
+			log.Printf("CHECK FAIL %s:%d (%v)", req.Server, req.Port, elapsed)
+			jsonResponse(w, http.StatusOK, CheckResponse{OK: false})
 		} else {
-			json.NewEncoder(w).Encode(CheckResponse{OK: true, Ping: ping})
+			log.Printf("CHECK OK   %s:%d %dms (%v)", req.Server, req.Port, ping, elapsed)
+			jsonResponse(w, http.StatusOK, CheckResponse{OK: true, Ping: ping})
 		}
 	})
 
-	// POST /check-batch — check multiple proxies concurrently
 	mux.HandleFunc("/check-batch", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
 		var reqs []CheckRequest
 		if err := json.NewDecoder(r.Body).Decode(&reqs); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
+			jsonResponse(w, http.StatusBadRequest, nil)
 			return
 		}
 
@@ -213,25 +188,29 @@ func main() {
 		if limit < 1 {
 			limit = 1
 		}
-		if limit > 50 {
-			limit = 50
+		if limit > maxConcurrency {
+			limit = maxConcurrency
 		}
 
+		log.Printf("BATCH START %d proxies, concurrency=%d", len(reqs), limit)
+		start := time.Now()
+
 		results := make([]CheckResponse, len(reqs))
-		batchCheck(r.Context(), reqs, limit, func(p CheckRequest, res CheckResponse) {
-			for i, req := range reqs {
-				if req.Server == p.Server && req.Port == p.Port && req.Secret == p.Secret {
-					results[i] = res
-					break
-				}
-			}
+		batchCheck(r.Context(), reqs, limit, func(idx int, res CheckResponse) {
+			results[idx] = res
 		})
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(results)
+		working := 0
+		for _, r := range results {
+			if r.OK {
+				working++
+			}
+		}
+		log.Printf("BATCH DONE  %d/%d working (%v)", working, len(reqs), time.Since(start))
+
+		jsonResponse(w, http.StatusOK, results)
 	})
 
-	// Serve static files from public/
 	publicDir := filepath.Join(".", "public")
 	fs := http.FileServer(http.Dir(publicDir))
 	mux.Handle("/", fs)
@@ -247,7 +226,6 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Graceful shutdown
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
 
@@ -260,7 +238,7 @@ func main() {
 	<-done
 	log.Println("Shutting down...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {

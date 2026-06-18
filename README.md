@@ -1,18 +1,19 @@
 # 🛡️ MTProto Deep Checker
 
-A powerful, pure Node.js tool to verify **Telegram MTProto Proxies** by performing real protocol handshakes. Unlike simple TCP checkers, this tool attempts to fetch the actual server configuration from Telegram via the proxy, ensuring 100% connectivity and eliminating the "Connecting..." issue.
+A powerful tool to verify **Telegram MTProto Proxies** by performing real protocol handshakes. Unlike simple TCP checkers, this tool attempts to fetch the actual server configuration from Telegram via the proxy, ensuring 100% connectivity and eliminating the "Connecting..." issue.
 
 ![UI Screenshot](images/screenshot.png)
 
 ## 🌟 Features
 
-* **Deep Inspection:** Uses `GetConfig` request to verify if the proxy can actually transfer Telegram data.
-* **Pure JavaScript:** Built with **GramJS**. No need for C++ compilers, `node-gyp`, or Visual Studio Build Tools.
+* **Deep Inspection:** Uses `help.getNearestDC` / `help.GetConfig` requests to verify if the proxy can actually transfer Telegram data.
+* **Dual Backend:** Choose between Node.js (GramJS) or Go (gotd/td) backend.
 * **Smart Filtering:** Automatically detects and removes invalid secrets, spam links, and bad ports.
 * **Modern UI:** Beautiful Dark Mode interface with real-time logs and progress bars.
-* **Cross-Platform:** Works on Windows, Linux, and macOS.
-* **No Auth Needed:** Uses public test keys, so you don't need to log in with your phone number.
+* **File Upload:** Import proxy lists from .txt, .csv, or .list files.
+* **Export Results:** Download working proxies as TXT or JSON files.
 * **Bilingual:** Supports both English and Persian (Farsi) interfaces.
+* **No Auth Needed:** Uses public test keys, so you don't need to log in with your phone number.
 
 ## 🚀 Installation
 
@@ -22,29 +23,33 @@ Grab `MTProto-Checker.exe` from [Releases](../../releases). Double-click to run.
 
 > Browser opens automatically at `http://localhost:3000`.
 
-### Option 2 — Run from source (requires Node.js)
+### Option 2 — Run from source with Go (recommended)
 
 #### Prerequisites
-You need **Node.js** installed on your machine. [Download it here](https://nodejs.org/).
+You need **Go 1.18+** installed. [Download it here](https://go.dev/dl/).
 
 #### Steps
-1.  Clone this repository:
-    ```bash
-    git clone https://github.com/rahgozar94725/MTProto-Checker.git
-    cd MTProto-Checker
-    ```
+```bash
+git clone https://github.com/rahgozar94725/MTProto-Checker.git
+cd MTProto-Checker
+go build -o mtproto-checker.exe .
+.\mtproto-checker.exe
+```
 
-2.  Install dependencies:
-    ```bash
-    npm install
-    ```
+> Binary: ~21MB, no Node.js required.
 
-3.  Run the application:
-    ```bash
-    node app.js
-    ```
+### Option 3 — Run from source with Node.js
 
-4.  The browser will open automatically at `http://localhost:3000`.
+#### Prerequisites
+You need **Node.js** installed. [Download it here](https://nodejs.org/).
+
+#### Steps
+```bash
+git clone https://github.com/rahgozar94725/MTProto-Checker.git
+cd MTProto-Checker
+npm install
+node app.js
+```
 
 ### Build .exe yourself
 
@@ -72,12 +77,17 @@ Many proxies respond to TCP pings but fail to encrypt/decrypt Telegram packets (
 This tool does the following:
 1.  **Parses & Sanitizes:** Cleans up broken links (e.g., `.&port` typos).
 2.  **Validates Secret:** Rejects secrets that are too long (spam padding) or invalid.
-3.  **Connects:** Establishes a secure MTProto connection.
-4.  **Invokes API:** Sends a `help.getConfig` request to Telegram Data Centers.
-5.  **Result:** If the server replies with config data, the proxy is marked as **Working**.
+3.  **Connects:** Establishes a secure MTProto connection through the proxy.
+4.  **Invokes API:** Sends a `help.getNearestDC` request to Telegram Data Centers.
+5.  **Result:** If the server replies, the proxy is marked as **Working** with its latency.
 
 ## 🛠 Dependencies
 
+### Go Backend (recommended)
+* [gotd/td](https://github.com/gotd/td) - MTProto API client with native MTProxy support
+* No external dependencies needed — single binary
+
+### Node.js Backend
 * [express](https://www.npmjs.com/package/express) - Web server
 * [telegram](https://www.npmjs.com/package/telegram) (GramJS) - MTProto implementation
 * [open](https://www.npmjs.com/package/open) - Opens browser automatically
