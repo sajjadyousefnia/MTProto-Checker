@@ -24,6 +24,29 @@
     <div>
         <h1 data-i18n="title">MTProto Pro Checker</h1>
         <p class="sub" data-i18n="subtitle">تست اتصال</p>
+
+        <div class="settings-bar">
+            <div class="setting-item">
+                <label data-i18n="concurrencyLabel">تعداد همزمان</label>
+                <select id="concurrencySelect">
+                    <option value="5">5</option>
+                    <option value="10" selected>10</option>
+                    <option value="20">20</option>
+                    <option value="30">30</option>
+                    <option value="50">50</option>
+                </select>
+            </div>
+            <div class="setting-item">
+                <label data-i18n="timeoutLabel">تایم‌اوت (ثانیه)</label>
+                <select id="timeoutSelect">
+                    <option value="5">5s</option>
+                    <option value="8" selected>8s</option>
+                    <option value="10">10s</option>
+                    <option value="15">15s</option>
+                    <option value="20">20s</option>
+                </select>
+            </div>
+        </div>
         
         <div class="progress-box"><div class="progress-bar" id="progressBar"></div></div>
         <div class="status-text" id="statusText" data-i18n="ready">آماده...</div>

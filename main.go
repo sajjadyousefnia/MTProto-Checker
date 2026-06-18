@@ -25,16 +25,19 @@ const (
 	defaultPort     = 3000
 	testAppID       = 6
 	testAppHash     = "eb06d4abfb49dc3eeb1aeb98ae0f581e"
-	maxBodySize     = 50 * 1024 * 1024 // 50MB
+	maxBodySize     = 50 * 1024 * 1024
 	maxConcurrency  = 50
-	defaultTimeout  = 8 * time.Second
+	defaultTimeout  = 8
+	minTimeout      = 3
+	maxTimeout      = 30
 	shutdownTimeout = 5 * time.Second
 )
 
 type CheckRequest struct {
-	Server string `json:"server"`
-	Port   int    `json:"port"`
-	Secret string `json:"secret"`
+	Server  string `json:"server"`
+	Port    int    `json:"port"`
+	Secret  string `json:"secret"`
+	Timeout int    `json:"timeout,omitempty"`
 }
 
 type CheckResponse struct {
@@ -55,7 +58,7 @@ func decodeSecret(s string) ([]byte, error) {
 	return nil, errors.Errorf("unable to decode secret %q as hex or base64url", s)
 }
 
-func checkProxy(ctx context.Context, server string, port int, secret string) (int64, error) {
+func checkProxy(ctx context.Context, server string, port int, secret string, timeoutSec int) (int64, error) {
 	addr := net.JoinHostPort(server, fmt.Sprintf("%d", port))
 
 	decodedSecret, err := decodeSecret(secret)
@@ -72,8 +75,9 @@ func checkProxy(ctx context.Context, server string, port int, secret string) (in
 		Resolver: resolver,
 	})
 
+	timeout := time.Duration(timeoutSec) * time.Second
 	var ping int64
-	checkCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	err = client.Run(checkCtx, func(ctx context.Context) error {
@@ -114,7 +118,11 @@ func batchCheck(ctx context.Context, proxies []CheckRequest, limit int, onResult
 			limiter.Acquire()
 			defer limiter.Release()
 
-			ping, err := checkProxy(ctx, proxy.Server, proxy.Port, proxy.Secret)
+			timeout := proxy.Timeout
+			if timeout < minTimeout {
+				timeout = defaultTimeout
+			}
+			ping, err := checkProxy(ctx, proxy.Server, proxy.Port, proxy.Secret, timeout)
 			if err != nil {
 				onResult(idx, CheckResponse{OK: false})
 			} else {
@@ -154,15 +162,20 @@ func main() {
 			return
 		}
 
+		timeout := req.Timeout
+		if timeout < minTimeout || timeout > maxTimeout {
+			timeout = defaultTimeout
+		}
+
 		start := time.Now()
-		ping, err := checkProxy(r.Context(), req.Server, req.Port, req.Secret)
+		ping, err := checkProxy(r.Context(), req.Server, req.Port, req.Secret, timeout)
 		elapsed := time.Since(start)
 
 		if err != nil {
-			log.Printf("CHECK FAIL %s:%d (%v)", req.Server, req.Port, elapsed)
+			log.Printf("CHECK FAIL %s:%d timeout=%ds (%v)", req.Server, req.Port, timeout, elapsed)
 			jsonResponse(w, http.StatusOK, CheckResponse{OK: false})
 		} else {
-			log.Printf("CHECK OK   %s:%d %dms (%v)", req.Server, req.Port, ping, elapsed)
+			log.Printf("CHECK OK   %s:%d %dms timeout=%ds (%v)", req.Server, req.Port, ping, timeout, elapsed)
 			jsonResponse(w, http.StatusOK, CheckResponse{OK: true, Ping: ping})
 		}
 	})
@@ -192,7 +205,12 @@ func main() {
 			limit = maxConcurrency
 		}
 
-		log.Printf("BATCH START %d proxies, concurrency=%d", len(reqs), limit)
+		timeout := defaultTimeout
+		if len(reqs) > 0 && reqs[0].Timeout >= minTimeout && reqs[0].Timeout <= maxTimeout {
+			timeout = reqs[0].Timeout
+		}
+
+		log.Printf("BATCH START %d proxies, concurrency=%d, timeout=%ds", len(reqs), limit, timeout)
 		start := time.Now()
 
 		results := make([]CheckResponse, len(reqs))

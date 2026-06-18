@@ -22,7 +22,9 @@ const translations = {
         fileBtn: "📎 فایل",
         exportTxtBtn: "💾 TXT",
         exportJsonBtn: "💾 JSON",
-        toastExported: "✅ فایل دانلود شد!"
+        toastExported: "✅ فایل دانلود شد!",
+        concurrencyLabel: "تعداد همزمان",
+        timeoutLabel: "تایم‌اوت (ثانیه)"
     },
     en: {
         title: "MTProto Pro Checker",
@@ -47,7 +49,9 @@ const translations = {
         fileBtn: "📎 File",
         exportTxtBtn: "💾 TXT",
         exportJsonBtn: "💾 JSON",
-        toastExported: "✅ File downloaded!"
+        toastExported: "✅ File downloaded!",
+        concurrencyLabel: "Concurrent",
+        timeoutLabel: "Timeout (sec)"
     }
 };
 
@@ -107,6 +111,30 @@ let workingProxies = [];
 let skippedCount = 0;
 let isPaused = false;
 let pauseResolve = null;
+
+function getConcurrency() {
+    return parseInt(document.getElementById('concurrencySelect').value) || 10;
+}
+
+function getTimeout() {
+    return parseInt(document.getElementById('timeoutSelect').value) || 8;
+}
+
+function saveSettings() {
+    localStorage.setItem('concurrency', document.getElementById('concurrencySelect').value);
+    localStorage.setItem('timeout', document.getElementById('timeoutSelect').value);
+}
+
+function loadSettings() {
+    const c = localStorage.getItem('concurrency');
+    const t = localStorage.getItem('timeout');
+    if (c) document.getElementById('concurrencySelect').value = c;
+    if (t) document.getElementById('timeoutSelect').value = t;
+}
+
+document.getElementById('concurrencySelect').addEventListener('change', saveSettings);
+document.getElementById('timeoutSelect').addEventListener('change', saveSettings);
+loadSettings();
 
 function parseLink(link) {
     try {
@@ -188,15 +216,22 @@ async function startCheck() {
         let completed = 0;
         const total = validLinks.length;
 
+        const batchSize = getConcurrency();
+        const timeoutSec = getTimeout();
+        const clientTimeout = (timeoutSec + 2) * 1000;
+
+        log(`Settings: concurrency=${batchSize}, timeout=${timeoutSec}s`);
+
         const checkOne = async (proxyData) => {
             try {
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 10000);
+                const timeoutId = setTimeout(() => controller.abort(), clientTimeout);
 
+                const body = { ...proxyData, timeout: timeoutSec };
                 const response = await fetch('/check', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(proxyData),
+                    body: JSON.stringify(body),
                     signal: controller.signal
                 });
                 clearTimeout(timeoutId);
@@ -223,8 +258,6 @@ async function startCheck() {
                 updateUI(completed, total);
             }
         };
-
-        const batchSize = 10;
         let i = 0;
         while (i < validLinks.length) {
             const end = Math.min(i + batchSize, validLinks.length);
