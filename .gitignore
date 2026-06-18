@@ -4,3 +4,7 @@ pnpm-lock.yaml
 dist/
 build/assets.mjs
 graphify-out/
+
+# Go
+mtproto-checker.exe
+*.exe
