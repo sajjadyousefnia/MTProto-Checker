@@ -14,7 +14,7 @@ const PORT = 3000;
 const API_ID = 6;
 const API_HASH = 'eb06d4abfb49dc3eeb1aeb98ae0f581e';
 
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1d' }));
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
 app.use(express.json({ limit: '50mb' }));
 app.disable('x-powered-by');
 
