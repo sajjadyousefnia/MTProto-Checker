@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"regexp"
@@ -175,6 +176,7 @@ func checkProxy(ctx context.Context, server string, port int, secret string, tim
 
 type FetchChannelsRequest struct {
 	Channels []string `json:"channels"`
+	Proxy    string   `json:"proxy,omitempty"`
 }
 
 type FetchChannelsResponse struct {
@@ -212,19 +214,44 @@ func normalizeChannel(raw string) string {
 	return s
 }
 
+// buildHTTPClient returns an http.Client that routes through the given proxy.
+// Supports http://, https://, socks5:// and socks5h:// proxy URLs (all handled
+// natively by net/http). A bare "host:port" is treated as http://host:port.
+// An empty proxyRaw falls back to the standard environment-proxy behaviour.
+func buildHTTPClient(proxyRaw string) (*http.Client, error) {
+	proxyRaw = strings.TrimSpace(proxyRaw)
+	transport := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		MaxIdleConns:        20,
+		IdleConnTimeout:     30 * time.Second,
+		TLSHandshakeTimeout: 8 * time.Second,
+	}
+	if proxyRaw != "" {
+		if !strings.Contains(proxyRaw, "://") {
+			proxyRaw = "http://" + proxyRaw
+		}
+		proxyURL, err := url.Parse(proxyRaw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy URL: %v", err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	return &http.Client{Transport: transport}, nil
+}
+
 // fetchChannelProxies downloads the public web preview of a channel and extracts proxy links.
-func fetchChannelProxies(ctx context.Context, channel string) ([]string, error) {
-	url := "https://t.me/s/" + channel
+func fetchChannelProxies(ctx context.Context, client *http.Client, channel string) ([]string, error) {
+	reqURL := "https://t.me/s/" + channel
 	ctx, cancel := context.WithTimeout(ctx, channelFetchTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -597,7 +624,17 @@ func main() {
 			}
 		}
 
-		log.Printf("FETCH START %d channels", len(channels))
+		client, err := buildHTTPClient(req.Proxy)
+		if err != nil {
+			jsonResponse(w, http.StatusBadRequest, FetchChannelsResponse{Errors: []string{err.Error()}})
+			return
+		}
+
+		viaProxy := "direct"
+		if strings.TrimSpace(req.Proxy) != "" {
+			viaProxy = "via proxy"
+		}
+		log.Printf("FETCH START %d channels (%s)", len(channels), viaProxy)
 		start := time.Now()
 
 		type chResult struct {
@@ -611,7 +648,7 @@ func main() {
 			wg.Add(1)
 			go func(ch string) {
 				defer wg.Done()
-				links, err := fetchChannelProxies(r.Context(), ch)
+				links, err := fetchChannelProxies(r.Context(), client, ch)
 				resultsCh <- chResult{links: links, err: err, name: ch}
 			}(name)
 		}

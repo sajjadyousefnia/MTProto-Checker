@@ -212,6 +212,22 @@ textarea.channels-input {
     font-size: 12px;
 }
 
+.proxy-input {
+    width: 100%;
+    margin-top: 8px;
+    background-color: var(--input);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color var(--transition);
+}
+.proxy-input:focus { border-color: var(--accent); }
+
 .channels-bar .btn-row {
     margin-top: 8px;
 }

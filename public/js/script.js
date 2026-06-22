@@ -29,6 +29,7 @@ const translations = {
         timeoutLabel: "تایم‌اوت (ثانیه)",
         channelsLabel: "📡 کانال‌های پراکسی تلگرام (هر خط یک کانال)",
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
+        proxyPlaceholder: "پراکسی برای دور زدن فیلترینگ (اختیاری): socks5://127.0.0.1:10808",
         fetchBtn: "⬇ دریافت پراکسی از کانال‌ها",
         fetchingBtn: "⏳ در حال دریافت...",
         toastNoChannels: "⚠️ هیچ کانالی وارد نشده است!",
@@ -66,6 +67,7 @@ const translations = {
         timeoutLabel: "Timeout (sec)",
         channelsLabel: "📡 Telegram proxy channels (one per line)",
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
+        proxyPlaceholder: "Proxy to bypass filtering (optional): socks5://127.0.0.1:10808",
         fetchBtn: "⬇ Fetch proxies from channels",
         fetchingBtn: "⏳ Fetching...",
         toastNoChannels: "⚠️ No channels entered!",
@@ -103,6 +105,7 @@ const translations = {
         timeoutLabel: "Тайм-аут (сек)",
         channelsLabel: "📡 Telegram-каналы с прокси (по одному в строке)",
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
+        proxyPlaceholder: "Прокси для обхода блокировки (опц.): socks5://127.0.0.1:10808",
         fetchBtn: "⬇ Получить прокси из каналов",
         fetchingBtn: "⏳ Загрузка...",
         toastNoChannels: "⚠️ Каналы не указаны!",
@@ -140,6 +143,7 @@ const translations = {
         timeoutLabel: "超时（秒）",
         channelsLabel: "📡 Telegram 代理频道（每行一个）",
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
+        proxyPlaceholder: "用于绕过封锁的代理（可选）: socks5://127.0.0.1:10808",
         fetchBtn: "⬇ 从频道获取代理",
         fetchingBtn: "⏳ 获取中...",
         toastNoChannels: "⚠️ 未输入频道!",
@@ -186,6 +190,8 @@ function setLanguage(lang) {
     document.getElementById('outputProxies').placeholder = translations[lang].outputPlaceholder;
     const chEl = document.getElementById('inputChannels');
     if (chEl) chEl.placeholder = translations[lang].channelsPlaceholder;
+    const pxEl = document.getElementById('inputProxyUrl');
+    if (pxEl) pxEl.placeholder = translations[lang].proxyPlaceholder;
 }
 
 function updatePauseBtn() {
@@ -276,6 +282,13 @@ document.getElementById('concurrencySelect').addEventListener('change', saveSett
 document.getElementById('timeoutSelect').addEventListener('change', saveSettings);
 loadSettings();
 
+// Restore saved fetch proxy
+const savedProxy = localStorage.getItem('fetchProxy');
+if (savedProxy) {
+    const pxEl = document.getElementById('inputProxyUrl');
+    if (pxEl) pxEl.value = savedProxy;
+}
+
 function parseLink(link) {
     try {
         let cleanLink = link.trim().replace('.&', '&');
@@ -318,15 +331,18 @@ async function fetchFromChannels() {
     const channels = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
     if (channels.length === 0) return showToast(t.toastNoChannels, true);
 
+    const proxy = document.getElementById('inputProxyUrl').value.trim();
+    localStorage.setItem('fetchProxy', proxy);
+
     btn.disabled = true;
     btn.innerText = t.fetchingBtn;
-    log(`Fetching proxies from ${channels.length} channel(s)...`);
+    log(`Fetching proxies from ${channels.length} channel(s)${proxy ? ' via proxy' : ''}...`);
 
     try {
         const response = await fetch('/fetch-channels', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channels })
+            body: JSON.stringify({ channels, proxy })
         });
         if (!response.ok) throw new Error('Server error ' + response.status);
 
