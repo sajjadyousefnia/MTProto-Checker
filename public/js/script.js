@@ -338,8 +338,17 @@ async function fetchFromChannels() {
         }
 
         if (links.length === 0) {
-            showToast(t.toastFetchNone, true);
-            log('No proxies found in channels.');
+            // Distinguish "couldn't reach channels" from "channels had no proxies"
+            if (data.errors && data.errors.length >= channels.length) {
+                showToast(t.toastFetchError, true);
+                log(`All ${channels.length} channel(s) failed. First error: ${data.errors[0]}`, true);
+            } else if (data.errors && data.errors.length) {
+                showToast(t.toastFetchError, true);
+                log(`Some channels failed, none returned proxies. First error: ${data.errors[0]}`, true);
+            } else {
+                showToast(t.toastFetchNone, true);
+                log('Channels reachable but contained no proxy links.');
+            }
             return;
         }
 

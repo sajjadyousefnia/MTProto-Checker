@@ -234,15 +234,28 @@ func fetchChannelProxies(ctx context.Context, channel string) ([]string, error) 
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, channelBodyLimit))
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, channelBodyLimit))
 	if err != nil {
 		return nil, err
 	}
+	body := string(bodyBytes)
 
-	matches := proxyLinkRe.FindAllString(string(body), -1)
+	// If the public web preview is missing, the channel is private, misspelled,
+	// or has previews disabled — report that instead of a silent empty result.
+	if !strings.Contains(body, "tgme_widget_message") {
+		return nil, fmt.Errorf("no public preview (private channel, wrong name, or previews disabled)")
+	}
+
+	matches := proxyLinkRe.FindAllString(body, -1)
 	links := make([]string, 0, len(matches))
+	seen := make(map[string]struct{}, len(matches))
 	for _, m := range matches {
-		links = append(links, html.UnescapeString(m))
+		link := html.UnescapeString(m)
+		if _, ok := seen[link]; ok {
+			continue
+		}
+		seen[link] = struct{}{}
+		links = append(links, link)
 	}
 	return links, nil
 }
