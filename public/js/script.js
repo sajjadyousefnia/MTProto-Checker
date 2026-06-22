@@ -26,7 +26,15 @@ const translations = {
         exportJsonBtn: "💾 JSON",
         toastExported: "✅ فایل دانلود شد!",
         concurrencyLabel: "تعداد همزمان",
-        timeoutLabel: "تایم‌اوت (ثانیه)"
+        timeoutLabel: "تایم‌اوت (ثانیه)",
+        channelsLabel: "📡 کانال‌های پراکسی تلگرام (هر خط یک کانال)",
+        channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
+        fetchBtn: "⬇ دریافت پراکسی از کانال‌ها",
+        fetchingBtn: "⏳ در حال دریافت...",
+        toastNoChannels: "⚠️ هیچ کانالی وارد نشده است!",
+        toastFetched: "✅ {n} پراکسی از کانال‌ها دریافت شد!",
+        toastFetchNone: "😔 هیچ پراکسی‌ای در کانال‌ها پیدا نشد.",
+        toastFetchError: "⛔ خطا در دریافت از کانال‌ها."
     },
     en: {
         title: "MTProto Pro Checker",
@@ -55,7 +63,15 @@ const translations = {
         exportJsonBtn: "💾 JSON",
         toastExported: "✅ File downloaded!",
         concurrencyLabel: "Concurrent",
-        timeoutLabel: "Timeout (sec)"
+        timeoutLabel: "Timeout (sec)",
+        channelsLabel: "📡 Telegram proxy channels (one per line)",
+        channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
+        fetchBtn: "⬇ Fetch proxies from channels",
+        fetchingBtn: "⏳ Fetching...",
+        toastNoChannels: "⚠️ No channels entered!",
+        toastFetched: "✅ Fetched {n} proxies from channels!",
+        toastFetchNone: "😔 No proxies found in channels.",
+        toastFetchError: "⛔ Failed to fetch from channels."
     },
     ru: {
         title: "MTProto Pro Checker",
@@ -84,7 +100,15 @@ const translations = {
         exportJsonBtn: "💾 JSON",
         toastExported: "✅ Файл загружен!",
         concurrencyLabel: "Одновременно",
-        timeoutLabel: "Тайм-аут (сек)"
+        timeoutLabel: "Тайм-аут (сек)",
+        channelsLabel: "📡 Telegram-каналы с прокси (по одному в строке)",
+        channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
+        fetchBtn: "⬇ Получить прокси из каналов",
+        fetchingBtn: "⏳ Загрузка...",
+        toastNoChannels: "⚠️ Каналы не указаны!",
+        toastFetched: "✅ Получено {n} прокси из каналов!",
+        toastFetchNone: "😔 Прокси в каналах не найдены.",
+        toastFetchError: "⛔ Ошибка получения из каналов."
     },
     zh: {
         title: "MTProto Pro Checker",
@@ -113,7 +137,15 @@ const translations = {
         exportJsonBtn: "💾 JSON",
         toastExported: "✅ 文件已下载!",
         concurrencyLabel: "并发数",
-        timeoutLabel: "超时（秒）"
+        timeoutLabel: "超时（秒）",
+        channelsLabel: "📡 Telegram 代理频道（每行一个）",
+        channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
+        fetchBtn: "⬇ 从频道获取代理",
+        fetchingBtn: "⏳ 获取中...",
+        toastNoChannels: "⚠️ 未输入频道!",
+        toastFetched: "✅ 已从频道获取 {n} 个代理!",
+        toastFetchNone: "😔 频道中未找到代理.",
+        toastFetchError: "⛔ 从频道获取失败."
     }
 };
 
@@ -152,6 +184,8 @@ function setLanguage(lang) {
 
     document.getElementById('inputProxies').placeholder = translations[lang].inputPlaceholder;
     document.getElementById('outputProxies').placeholder = translations[lang].outputPlaceholder;
+    const chEl = document.getElementById('inputChannels');
+    if (chEl) chEl.placeholder = translations[lang].channelsPlaceholder;
 }
 
 function updatePauseBtn() {
@@ -274,6 +308,64 @@ function openHelp() {
         zh: 'https://github.com/rahgozar94725/MTProto-Checker/blob/main/README_ZH.md'
     };
     window.open(urls[currentLang] || urls.en, '_blank', 'noopener');
+}
+
+async function fetchFromChannels() {
+    const t = translations[currentLang];
+    const btn = document.getElementById('fetchBtn');
+    const raw = document.getElementById('inputChannels').value;
+
+    const channels = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    if (channels.length === 0) return showToast(t.toastNoChannels, true);
+
+    btn.disabled = true;
+    btn.innerText = t.fetchingBtn;
+    log(`Fetching proxies from ${channels.length} channel(s)...`);
+
+    try {
+        const response = await fetch('/fetch-channels', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channels })
+        });
+        if (!response.ok) throw new Error('Server error ' + response.status);
+
+        const data = await response.json();
+        const links = data.links || [];
+
+        if (data.errors && data.errors.length) {
+            data.errors.forEach(e => log(`Channel error: ${e}`, true));
+        }
+
+        if (links.length === 0) {
+            showToast(t.toastFetchNone, true);
+            log('No proxies found in channels.');
+            return;
+        }
+
+        // Merge into the input textarea, de-duplicating against existing lines
+        const input = document.getElementById('inputProxies');
+        const existing = input.value.split('\n').map(s => s.trim()).filter(Boolean);
+        const seen = new Set(existing);
+        const added = [];
+        for (const l of links) {
+            if (!seen.has(l)) {
+                seen.add(l);
+                added.push(l);
+            }
+        }
+        const merged = existing.concat(added);
+        input.value = merged.join('\n');
+
+        log(`Fetched ${links.length} proxies (${added.length} new) from channels.`);
+        showToast(t.toastFetched.replace('{n}', added.length));
+    } catch (e) {
+        log(`FETCH ERROR: ${e.message}`, true);
+        showToast(t.toastFetchError, true);
+    } finally {
+        btn.disabled = false;
+        btn.innerText = t.fetchBtn;
+    }
 }
 
 function handleStartStop() {

@@ -53,6 +53,14 @@
             </div>
         </div>
         
+        <div class="channels-bar">
+            <label data-i18n="channelsLabel">📡 کانال‌های پراکسی تلگرام (هر خط یک کانال)</label>
+            <textarea id="inputChannels" class="channels-input" placeholder="MTProxiess&#10;@DirectProxy&#10;https://t.me/s/socks5_telegram"></textarea>
+            <div class="btn-row">
+                <button class="btn-fetch" id="fetchBtn" onclick="fetchFromChannels()" data-i18n="fetchBtn">⬇ دریافت پراکسی از کانال‌ها</button>
+            </div>
+        </div>
+
         <div class="progress-box"><div class="progress-bar" id="progressBar"></div></div>
         <div class="status-text" id="statusText" data-i18n="ready">آماده...</div>
     </div>

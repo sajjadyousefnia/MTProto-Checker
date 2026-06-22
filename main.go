@@ -7,12 +7,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
+	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -168,6 +171,80 @@ func checkProxy(ctx context.Context, server string, port int, secret string, tim
 		return 0, err
 	}
 	return pingResult, nil
+}
+
+type FetchChannelsRequest struct {
+	Channels []string `json:"channels"`
+}
+
+type FetchChannelsResponse struct {
+	Links  []string `json:"links"`
+	Count  int      `json:"count"`
+	Errors []string `json:"errors,omitempty"`
+}
+
+const (
+	channelFetchTimeout = 12 * time.Second
+	maxChannels         = 30
+	channelBodyLimit    = 8 * 1024 * 1024
+)
+
+// proxyLinkRe matches both tg://proxy?... and https://t.me/proxy?... links.
+// Stops at characters that cannot appear inside an href in the page HTML.
+var proxyLinkRe = regexp.MustCompile(`(?:tg://proxy|https?://t\.me/proxy)\?[^\s"'<>\\]+`)
+
+// normalizeChannel turns user input (URL, @name, plain name) into a bare channel username.
+func normalizeChannel(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimPrefix(s, "http://")
+	s = strings.TrimPrefix(s, "t.me/")
+	s = strings.TrimPrefix(s, "telegram.me/")
+	s = strings.TrimPrefix(s, "s/") // t.me/s/<name>
+	s = strings.TrimPrefix(s, "@")
+	// Drop anything after the username (e.g. ?query or /123 message id)
+	if i := strings.IndexAny(s, "/?#"); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
+// fetchChannelProxies downloads the public web preview of a channel and extracts proxy links.
+func fetchChannelProxies(ctx context.Context, channel string) ([]string, error) {
+	url := "https://t.me/s/" + channel
+	ctx, cancel := context.WithTimeout(ctx, channelFetchTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, channelBodyLimit))
+	if err != nil {
+		return nil, err
+	}
+
+	matches := proxyLinkRe.FindAllString(string(body), -1)
+	links := make([]string, 0, len(matches))
+	for _, m := range matches {
+		links = append(links, html.UnescapeString(m))
+	}
+	return links, nil
 }
 
 func jsonResponse(w http.ResponseWriter, status int, v interface{}) {
@@ -473,6 +550,84 @@ func main() {
 		wg.Wait()
 		log.Printf("STREAM DONE %d/%d working", working, total)
 		sendEvent("done", map[string]int{"working": working, "total": total})
+	}))
+
+	mux.HandleFunc("/fetch-channels", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
+		var req FetchChannelsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonResponse(w, http.StatusBadRequest, FetchChannelsResponse{})
+			return
+		}
+
+		// Normalize + dedupe channel names
+		seenCh := make(map[string]struct{})
+		var channels []string
+		for _, c := range req.Channels {
+			name := normalizeChannel(c)
+			if name == "" {
+				continue
+			}
+			if _, ok := seenCh[name]; ok {
+				continue
+			}
+			seenCh[name] = struct{}{}
+			channels = append(channels, name)
+			if len(channels) >= maxChannels {
+				break
+			}
+		}
+
+		log.Printf("FETCH START %d channels", len(channels))
+		start := time.Now()
+
+		type chResult struct {
+			links []string
+			err   error
+			name  string
+		}
+		resultsCh := make(chan chResult, len(channels))
+		var wg sync.WaitGroup
+		for _, name := range channels {
+			wg.Add(1)
+			go func(ch string) {
+				defer wg.Done()
+				links, err := fetchChannelProxies(r.Context(), ch)
+				resultsCh <- chResult{links: links, err: err, name: ch}
+			}(name)
+		}
+		wg.Wait()
+		close(resultsCh)
+
+		seenLink := make(map[string]struct{})
+		var allLinks []string
+		var errs []string
+		for res := range resultsCh {
+			if res.err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", res.name, res.err))
+				continue
+			}
+			for _, l := range res.links {
+				if _, ok := seenLink[l]; ok {
+					continue
+				}
+				seenLink[l] = struct{}{}
+				allLinks = append(allLinks, l)
+			}
+		}
+
+		log.Printf("FETCH DONE %d links from %d channels (%v)", len(allLinks), len(channels), time.Since(start))
+		jsonResponse(w, http.StatusOK, FetchChannelsResponse{
+			Links:  allLinks,
+			Count:  len(allLinks),
+			Errors: errs,
+		})
 	}))
 
 	embeddedFS, err := fs.Sub(publicFS, "public")
