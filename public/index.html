@@ -56,10 +56,47 @@
         <div class="channels-bar">
             <label data-i18n="channelsLabel">📡 کانال‌های پراکسی تلگرام (هر خط یک کانال)</label>
             <textarea id="inputChannels" class="channels-input" placeholder="MTProxiess&#10;@DirectProxy&#10;https://t.me/s/socks5_telegram"></textarea>
-            <input type="text" id="inputProxyUrl" class="proxy-input" placeholder="پراکسی برای دور زدن فیلترینگ (اختیاری): socks5://127.0.0.1:10808" dir="ltr">
-            <div class="btn-row">
-                <button class="btn-fetch" id="fetchBtn" onclick="fetchFromChannels()" data-i18n="fetchBtn">⬇ دریافت پراکسی از کانال‌ها</button>
+            <input type="text" id="tgProxyLink" class="proxy-input" placeholder="پراکسی MTProto سالم: tg://proxy?server=...&port=...&secret=..." dir="ltr">
+            <div class="tg-limit-row">
+                <label for="tgPerChannel" data-i18n="perChannelLabel">تعداد پراکسی از هر کانال (جدیدترین‌ها):</label>
+                <input type="number" id="tgPerChannel" min="1" max="100" value="10" dir="ltr">
             </div>
+            <div class="btn-row">
+                <button class="btn-fetch" id="fetchBtn" onclick="fetchViaTelegram()" data-i18n="fetchBtn">⬇ دریافت پراکسی از کانال‌ها</button>
+            </div>
+
+            <details class="tg-section" id="tgSection">
+                <summary data-i18n="tgSummary">🔐 ورود به حساب تلگرام (یک‌بار لازم است)</summary>
+                <p class="tg-hint" data-i18n="tgHint">دریافت پراکسی‌ها مستقیماً از API تلگرام و تونل‌شده از طریق پراکسی MTProto بالا انجام می‌شود. برای این کار باید یک‌بار با حساب تلگرام وارد شوید. اطلاعات ورود فقط روی همین سیستم ذخیره می‌شود و هرگز در گیت قرار نمی‌گیرد.</p>
+
+                <input type="text" id="tgPhone" class="proxy-input" placeholder="+98912xxxxxxx" dir="ltr">
+
+                <details class="tg-adv">
+                    <summary data-i18n="tgAdv">تنظیمات پیشرفته (api_id / api_hash)</summary>
+                    <p class="tg-hint" data-i18n="tgAdvHint">برای پایداری بیشتر، یک api_id و api_hash از my.telegram.org بسازید. خالی بگذارید تا از مقادیر پیش‌فرض استفاده شود.</p>
+                    <input type="text" id="tgAppId" class="proxy-input" placeholder="api_id" dir="ltr">
+                    <input type="text" id="tgAppHash" class="proxy-input" placeholder="api_hash" dir="ltr">
+                </details>
+
+                <div class="btn-row">
+                    <button class="btn-fetch" id="tgLoginBtn" onclick="tgStartLogin()" data-i18n="tgLoginBtn">ورود</button>
+                    <button class="btn-pause" id="tgLogoutBtn" onclick="tgLogout()" data-i18n="tgLogoutBtn">خروج</button>
+                </div>
+
+                <div id="tgCodeRow" class="btn-row" style="display:none">
+                    <input type="text" id="tgCode" class="proxy-input" placeholder="کد تایید" dir="ltr">
+                    <button class="btn-fetch" id="tgCodeBtn" onclick="tgSubmitCode()" data-i18n="tgCodeBtn">تایید کد</button>
+                </div>
+                <div id="tgPwdRow" class="btn-row" style="display:none">
+                    <input type="password" id="tgPwd" class="proxy-input" placeholder="رمز دو مرحله‌ای (2FA)" dir="ltr">
+                    <button class="btn-fetch" id="tgPwdBtn" onclick="tgSubmitPassword()" data-i18n="tgPwdBtn">تایید رمز</button>
+                </div>
+                <div id="tgCaptchaRow" style="display:none;margin-top:10px">
+                    <p class="tg-hint" data-i18n="tgCaptchaHint">برای ادامه، تأیید امنیتی reCAPTCHA را کامل کنید:</p>
+                    <div id="tgCaptcha"></div>
+                </div>
+                <div class="status-text" id="tgStatus"></div>
+            </details>
         </div>
 
         <div class="progress-box"><div class="progress-bar" id="progressBar"></div></div>

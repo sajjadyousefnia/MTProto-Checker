@@ -7,16 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"html"
-	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"regexp"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -174,26 +170,13 @@ func checkProxy(ctx context.Context, server string, port int, secret string, tim
 	return pingResult, nil
 }
 
-type FetchChannelsRequest struct {
-	Channels []string `json:"channels"`
-	Proxy    string   `json:"proxy,omitempty"`
-}
-
 type FetchChannelsResponse struct {
 	Links  []string `json:"links"`
 	Count  int      `json:"count"`
 	Errors []string `json:"errors,omitempty"`
 }
 
-const (
-	channelFetchTimeout = 12 * time.Second
-	maxChannels         = 30
-	channelBodyLimit    = 8 * 1024 * 1024
-)
-
-// proxyLinkRe matches both tg://proxy?... and https://t.me/proxy?... links.
-// Stops at characters that cannot appear inside an href in the page HTML.
-var proxyLinkRe = regexp.MustCompile(`(?:tg://proxy|https?://t\.me/proxy)\?[^\s"'<>\\]+`)
+const maxChannels = 30
 
 // normalizeChannel turns user input (URL, @name, plain name) into a bare channel username.
 func normalizeChannel(raw string) string {
@@ -212,79 +195,6 @@ func normalizeChannel(raw string) string {
 		s = s[:i]
 	}
 	return s
-}
-
-// buildHTTPClient returns an http.Client that routes through the given proxy.
-// Supports http://, https://, socks5:// and socks5h:// proxy URLs (all handled
-// natively by net/http). A bare "host:port" is treated as http://host:port.
-// An empty proxyRaw falls back to the standard environment-proxy behaviour.
-func buildHTTPClient(proxyRaw string) (*http.Client, error) {
-	proxyRaw = strings.TrimSpace(proxyRaw)
-	transport := &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
-		MaxIdleConns:        20,
-		IdleConnTimeout:     30 * time.Second,
-		TLSHandshakeTimeout: 8 * time.Second,
-	}
-	if proxyRaw != "" {
-		if !strings.Contains(proxyRaw, "://") {
-			proxyRaw = "http://" + proxyRaw
-		}
-		proxyURL, err := url.Parse(proxyRaw)
-		if err != nil {
-			return nil, fmt.Errorf("invalid proxy URL: %v", err)
-		}
-		transport.Proxy = http.ProxyURL(proxyURL)
-	}
-	return &http.Client{Transport: transport}, nil
-}
-
-// fetchChannelProxies downloads the public web preview of a channel and extracts proxy links.
-func fetchChannelProxies(ctx context.Context, client *http.Client, channel string) ([]string, error) {
-	reqURL := "https://t.me/s/" + channel
-	ctx, cancel := context.WithTimeout(ctx, channelFetchTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d", resp.StatusCode)
-	}
-
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, channelBodyLimit))
-	if err != nil {
-		return nil, err
-	}
-	body := string(bodyBytes)
-
-	// If the public web preview is missing, the channel is private, misspelled,
-	// or has previews disabled — report that instead of a silent empty result.
-	if !strings.Contains(body, "tgme_widget_message") {
-		return nil, fmt.Errorf("no public preview (private channel, wrong name, or previews disabled)")
-	}
-
-	matches := proxyLinkRe.FindAllString(body, -1)
-	links := make([]string, 0, len(matches))
-	seen := make(map[string]struct{}, len(matches))
-	for _, m := range matches {
-		link := html.UnescapeString(m)
-		if _, ok := seen[link]; ok {
-			continue
-		}
-		seen[link] = struct{}{}
-		links = append(links, link)
-	}
-	return links, nil
 }
 
 func jsonResponse(w http.ResponseWriter, status int, v interface{}) {
@@ -592,92 +502,192 @@ func main() {
 		sendEvent("done", map[string]int{"working": working, "total": total})
 	}))
 
-	mux.HandleFunc("/fetch-channels", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	// ---- Telegram authenticated channel fetching ----
+
+	// Check whether a stored session is still valid/authorized (through a proxy).
+	mux.HandleFunc("/tg/status", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-
-		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
-
-		var req FetchChannelsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonResponse(w, http.StatusBadRequest, FetchChannelsResponse{})
+		var req struct {
+			Proxy ProxyCreds `json:"proxy"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
 			return
 		}
-
-		// Normalize + dedupe channel names
-		seenCh := make(map[string]struct{})
-		var channels []string
-		for _, c := range req.Channels {
-			name := normalizeChannel(c)
-			if name == "" {
-				continue
-			}
-			if _, ok := seenCh[name]; ok {
-				continue
-			}
-			seenCh[name] = struct{}{}
-			channels = append(channels, name)
-			if len(channels) >= maxChannels {
-				break
-			}
-		}
-
-		client, err := buildHTTPClient(req.Proxy)
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		authorized, err := isAuthorized(ctx, req.Proxy)
 		if err != nil {
-			jsonResponse(w, http.StatusBadRequest, FetchChannelsResponse{Errors: []string{err.Error()}})
+			jsonResponse(w, http.StatusOK, map[string]any{"authorized": false, "error": err.Error()})
 			return
 		}
+		jsonResponse(w, http.StatusOK, map[string]any{"authorized": authorized})
+	}))
 
-		viaProxy := "direct"
-		if strings.TrimSpace(req.Proxy) != "" {
-			viaProxy = "via proxy"
+	// Start a phone-number login (sends the code). Optionally accepts a custom
+	// api_id/api_hash which is persisted locally (outside the repo) for reuse.
+	mux.HandleFunc("/tg/login/start", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
 		}
-		log.Printf("FETCH START %d channels (%s)", len(channels), viaProxy)
-		start := time.Now()
-
-		type chResult struct {
-			links []string
-			err   error
-			name  string
+		var req struct {
+			Proxy   ProxyCreds `json:"proxy"`
+			Phone   string     `json:"phone"`
+			AppID   int        `json:"app_id,omitempty"`
+			AppHash string     `json:"app_hash,omitempty"`
 		}
-		resultsCh := make(chan chResult, len(channels))
-		var wg sync.WaitGroup
-		for _, name := range channels {
-			wg.Add(1)
-			go func(ch string) {
-				defer wg.Done()
-				links, err := fetchChannelProxies(r.Context(), client, ch)
-				resultsCh <- chResult{links: links, err: err, name: ch}
-			}(name)
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+			return
 		}
-		wg.Wait()
-		close(resultsCh)
-
-		seenLink := make(map[string]struct{})
-		var allLinks []string
-		var errs []string
-		for res := range resultsCh {
-			if res.err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", res.name, res.err))
-				continue
+		if strings.TrimSpace(req.Phone) == "" {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "phone is required"})
+			return
+		}
+		appID, appHash := loadAppCreds()
+		if req.AppID != 0 && strings.TrimSpace(req.AppHash) != "" {
+			appID, appHash = req.AppID, strings.TrimSpace(req.AppHash)
+			if err := saveAppCreds(appID, appHash); err != nil {
+				log.Printf("WARN: could not persist app creds: %v", err)
 			}
-			for _, l := range res.links {
-				if _, ok := seenLink[l]; ok {
-					continue
+		}
+		if err := loginMgr.start(req.Proxy, strings.TrimSpace(req.Phone), appID, appHash); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+	}))
+
+	mux.HandleFunc("/tg/login/code", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Code string `json:"code"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+			return
+		}
+		if err := loginMgr.submitCode(strings.TrimSpace(req.Code)); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+	}))
+
+	mux.HandleFunc("/tg/login/password", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+			return
+		}
+		if err := loginMgr.submitPassword(req.Password); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+	}))
+
+	mux.HandleFunc("/tg/login/status", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		state, errMsg, phone, sitekey := loginMgr.snapshot()
+		jsonResponse(w, http.StatusOK, map[string]any{"state": state, "error": errMsg, "phone": phone, "sitekey": sitekey})
+	}))
+
+	// Submit a solved reCAPTCHA token to satisfy a send-code challenge.
+	mux.HandleFunc("/tg/login/captcha", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+			return
+		}
+		if strings.TrimSpace(req.Token) == "" {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "token is required"})
+			return
+		}
+		if err := loginMgr.submitCaptcha(strings.TrimSpace(req.Token)); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+	}))
+
+	// Report whether a saved session/credentials exist so the UI can resume
+	// without forcing a fresh login. This only reads local files (no network),
+	// so it is fast and safe to call on page load.
+	mux.HandleFunc("/tg/me", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{"has_session": false, "has_app_creds": false}
+		if path, err := sessionFilePath(); err == nil {
+			if info, serr := os.Stat(path); serr == nil && info.Size() > 0 {
+				resp["has_session"] = true
+			}
+		}
+		// Surface custom api_id/api_hash saved by the user (not the public test
+		// fallback) so the advanced fields can be pre-filled.
+		if path, err := appConfigPath(); err == nil {
+			if data, rerr := os.ReadFile(path); rerr == nil {
+				var cfg tgAppConfig
+				if json.Unmarshal(data, &cfg) == nil && cfg.AppID != 0 && cfg.AppHash != "" {
+					resp["has_app_creds"] = true
+					resp["app_id"] = cfg.AppID
+					resp["app_hash"] = cfg.AppHash
 				}
-				seenLink[l] = struct{}{}
-				allLinks = append(allLinks, l)
 			}
 		}
+		jsonResponse(w, http.StatusOK, resp)
+	}))
 
-		log.Printf("FETCH DONE %d links from %d channels (%v)", len(allLinks), len(channels), time.Since(start))
-		jsonResponse(w, http.StatusOK, FetchChannelsResponse{
-			Links:  allLinks,
-			Count:  len(allLinks),
-			Errors: errs,
-		})
+	mux.HandleFunc("/tg/logout", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := logout(); err != nil {
+			jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+	}))
+
+	// Fetch proxy links from channels using the authenticated MTProto client
+	// (tunneled through a working MTProto proxy — no HTTP/SOCKS proxy needed).
+	mux.HandleFunc("/fetch-channels-tg", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+		var req FetchTGRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonResponse(w, http.StatusBadRequest, FetchChannelsResponse{Errors: []string{"invalid request"}})
+			return
+		}
+		log.Printf("FETCH-TG START %d channels via %s:%d", len(req.Channels), req.Proxy.Server, req.Proxy.Port)
+		start := time.Now()
+		resp, err := fetchChannelsViaTelegram(r.Context(), req)
+		if err != nil {
+			jsonResponse(w, http.StatusOK, FetchChannelsResponse{Errors: []string{err.Error()}})
+			return
+		}
+		log.Printf("FETCH-TG DONE %d links (%v)", resp.Count, time.Since(start))
+		jsonResponse(w, http.StatusOK, resp)
 	}))
 
 	embeddedFS, err := fs.Sub(publicFS, "public")

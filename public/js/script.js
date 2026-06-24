@@ -31,6 +31,7 @@ const translations = {
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
         proxyPlaceholder: "پراکسی برای دور زدن فیلترینگ (اختیاری): socks5://127.0.0.1:10808",
         fetchBtn: "⬇ دریافت پراکسی از کانال‌ها",
+        perChannelLabel: "تعداد پراکسی از هر کانال (جدیدترین‌ها):",
         fetchingBtn: "⏳ در حال دریافت...",
         toastNoChannels: "⚠️ هیچ کانالی وارد نشده است!",
         toastFetched: "✅ {n} پراکسی از کانال‌ها دریافت شد!",
@@ -69,6 +70,7 @@ const translations = {
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
         proxyPlaceholder: "Proxy to bypass filtering (optional): socks5://127.0.0.1:10808",
         fetchBtn: "⬇ Fetch proxies from channels",
+        perChannelLabel: "Proxies per channel (newest):",
         fetchingBtn: "⏳ Fetching...",
         toastNoChannels: "⚠️ No channels entered!",
         toastFetched: "✅ Fetched {n} proxies from channels!",
@@ -107,6 +109,7 @@ const translations = {
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
         proxyPlaceholder: "Прокси для обхода блокировки (опц.): socks5://127.0.0.1:10808",
         fetchBtn: "⬇ Получить прокси из каналов",
+        perChannelLabel: "Прокси с канала (новейшие):",
         fetchingBtn: "⏳ Загрузка...",
         toastNoChannels: "⚠️ Каналы не указаны!",
         toastFetched: "✅ Получено {n} прокси из каналов!",
@@ -145,6 +148,7 @@ const translations = {
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
         proxyPlaceholder: "用于绕过封锁的代理（可选）: socks5://127.0.0.1:10808",
         fetchBtn: "⬇ 从频道获取代理",
+        perChannelLabel: "每个频道的代理数（最新）:",
         fetchingBtn: "⏳ 获取中...",
         toastNoChannels: "⚠️ 未输入频道!",
         toastFetched: "✅ 已从频道获取 {n} 个代理!",
@@ -190,8 +194,6 @@ function setLanguage(lang) {
     document.getElementById('outputProxies').placeholder = translations[lang].outputPlaceholder;
     const chEl = document.getElementById('inputChannels');
     if (chEl) chEl.placeholder = translations[lang].channelsPlaceholder;
-    const pxEl = document.getElementById('inputProxyUrl');
-    if (pxEl) pxEl.placeholder = translations[lang].proxyPlaceholder;
 }
 
 function updatePauseBtn() {
@@ -282,11 +284,59 @@ document.getElementById('concurrencySelect').addEventListener('change', saveSett
 document.getElementById('timeoutSelect').addEventListener('change', saveSettings);
 loadSettings();
 
-// Restore saved fetch proxy
+// Restore the saved MTProto proxy link
 const savedProxy = localStorage.getItem('fetchProxy');
 if (savedProxy) {
-    const pxEl = document.getElementById('inputProxyUrl');
-    if (pxEl) pxEl.value = savedProxy;
+    const pxEl = document.getElementById('tgProxyLink');
+    if (pxEl && !pxEl.value) pxEl.value = savedProxy;
+}
+
+// ----- Channel list: persistence + de-duplication -----
+
+// channelKey normalizes a channel line (URL / @name / bare name) to a single
+// canonical key so duplicates collapse regardless of how they were written.
+function channelKey(line) {
+    let s = line.trim().toLowerCase();
+    s = s.replace(/^https?:\/\//, '').replace(/^t\.me\//, '').replace(/^telegram\.me\//, '');
+    s = s.replace(/^s\//, '').replace(/^@/, '');
+    const cut = s.search(/[/?#]/);
+    if (cut >= 0) s = s.slice(0, cut);
+    return s;
+}
+
+// dedupeChannels returns the non-empty channel lines with duplicates removed,
+// keeping the first occurrence of each.
+function dedupeChannels(raw) {
+    const seen = new Set();
+    const out = [];
+    for (const line of raw.split('\n')) {
+        const t = line.trim();
+        if (!t) continue;
+        const key = channelKey(t);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(t);
+    }
+    return out;
+}
+
+function saveChannels() {
+    localStorage.setItem('fetchChannels', document.getElementById('inputChannels').value);
+}
+
+// Restore the saved channel list and persist edits as the user types.
+const channelsEl = document.getElementById('inputChannels');
+if (channelsEl) {
+    const savedChannels = localStorage.getItem('fetchChannels');
+    if (savedChannels && !channelsEl.value.trim()) channelsEl.value = savedChannels;
+    channelsEl.addEventListener('input', saveChannels);
+}
+
+// Restore the saved per-channel proxy count.
+const perChannelEl = document.getElementById('tgPerChannel');
+if (perChannelEl) {
+    const savedPerChannel = localStorage.getItem('tgPerChannel');
+    if (savedPerChannel) perChannelEl.value = savedPerChannel;
 }
 
 function parseLink(link) {
@@ -323,70 +373,273 @@ function openHelp() {
     window.open(urls[currentLang] || urls.en, '_blank', 'noopener');
 }
 
-async function fetchFromChannels() {
+// ----- Telegram authenticated fetch -----
+
+function tgSetStatus(msg, isErr) {
+    const el = document.getElementById('tgStatus');
+    if (el) {
+        el.innerText = msg || '';
+        el.style.color = isErr ? 'var(--danger, #ff5c5c)' : '';
+    }
+}
+
+// Returns the MTProto proxy creds {server, port, secret} from the tg proxy
+// link field, or null if missing/invalid.
+function tgProxyCreds() {
+    const raw = document.getElementById('tgProxyLink').value.trim();
+    if (!raw) return null;
+    const parsed = parseLink(raw);
+    if (!parsed) return null;
+    return { server: parsed.server, port: Number(parsed.port), secret: parsed.secret };
+}
+
+// On page load, check for a session/credentials already saved on this machine
+// and resume from them so the user need not log in again. Reads local files
+// only (no network round-trip), so it is instant.
+async function tgResumeSession() {
+    try {
+        const res = await fetch('/tg/me');
+        const data = await res.json();
+        if (data.has_app_creds) {
+            const idEl = document.getElementById('tgAppId');
+            const hashEl = document.getElementById('tgAppHash');
+            if (idEl && !idEl.value) idEl.value = data.app_id;
+            if (hashEl && !hashEl.value) hashEl.value = data.app_hash;
+            // Open the advanced section so the restored values are visible.
+            const adv = document.querySelector('.tg-adv');
+            if (adv) adv.open = true;
+        }
+        if (data.has_session) {
+            tgSetStatus('✅ سشن ذخیره‌شده پیدا شد — وارد هستید. برای دریافت از کانال‌ها نیازی به ورود مجدد نیست.');
+            const loginBtn = document.getElementById('tgLoginBtn');
+            if (loginBtn) loginBtn.innerText = 'ورود مجدد';
+        }
+    } catch (e) { /* no saved session; leave the form as-is */ }
+}
+
+let tgPollTimer = null;
+
+async function tgPollLoginStatus() {
+    try {
+        const res = await fetch('/tg/login/status');
+        const data = await res.json();
+        const codeRow = document.getElementById('tgCodeRow');
+        const pwdRow = document.getElementById('tgPwdRow');
+        const captchaRow = document.getElementById('tgCaptchaRow');
+        codeRow.style.display = data.state === 'awaiting_code' ? '' : 'none';
+        pwdRow.style.display = data.state === 'awaiting_password' ? '' : 'none';
+        captchaRow.style.display = data.state === 'awaiting_captcha' ? '' : 'none';
+
+        if (data.state === 'awaiting_captcha') {
+            tgSetStatus('تأیید امنیتی reCAPTCHA لازم است. لطفاً آن را کامل کنید.');
+            tgRenderCaptcha(data.sitekey);
+        } else if (data.state === 'awaiting_code') {
+            tgSetStatus('کد تایید ارسال شد. کد را وارد کنید.');
+        } else if (data.state === 'awaiting_password') {
+            tgSetStatus('رمز دو مرحله‌ای (2FA) را وارد کنید.');
+        } else if (data.state === 'authorized') {
+            tgSetStatus('✅ ورود موفق. اکنون می‌توانید از کانال‌ها دریافت کنید.');
+            log('Telegram login successful.');
+            clearInterval(tgPollTimer); tgPollTimer = null;
+        } else if (data.state === 'failed') {
+            tgSetStatus('⛔ ورود ناموفق: ' + (data.error || ''), true);
+            log('Telegram login failed: ' + (data.error || ''), true);
+            clearInterval(tgPollTimer); tgPollTimer = null;
+        }
+    } catch (e) { /* keep polling */ }
+}
+
+async function tgStartLogin() {
+    const creds = tgProxyCreds();
+    if (!creds) return showToast('⚠️ لینک پراکسی MTProto سالم را وارد کنید.', true);
+    const phone = document.getElementById('tgPhone').value.trim();
+    if (!phone) return showToast('⚠️ شماره تلفن را وارد کنید.', true);
+
+    const body = { proxy: creds, phone };
+    const appId = document.getElementById('tgAppId').value.trim();
+    const appHash = document.getElementById('tgAppHash').value.trim();
+    if (appId && appHash) { body.app_id = Number(appId); body.app_hash = appHash; }
+
+    // Reset any captcha widget from a previous attempt so it re-renders fresh.
+    tgCaptchaSitekey = null;
+    document.getElementById('tgCaptchaRow').style.display = 'none';
+
+    tgSetStatus('در حال اتصال و ارسال کد...');
+    try {
+        const res = await fetch('/tg/login/start', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (data.error) { tgSetStatus('⛔ ' + data.error, true); return; }
+        if (tgPollTimer) clearInterval(tgPollTimer);
+        tgPollTimer = setInterval(tgPollLoginStatus, 1500);
+        tgPollLoginStatus();
+    } catch (e) {
+        tgSetStatus('⛔ ' + e.message, true);
+    }
+}
+
+async function tgSubmitCode() {
+    const code = document.getElementById('tgCode').value.trim();
+    if (!code) return;
+    try {
+        const res = await fetch('/tg/login/code', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code })
+        });
+        const data = await res.json();
+        if (data.error) { tgSetStatus('⛔ ' + data.error, true); return; }
+        tgSetStatus('در حال بررسی کد...');
+    } catch (e) { tgSetStatus('⛔ ' + e.message, true); }
+}
+
+async function tgSubmitPassword() {
+    const password = document.getElementById('tgPwd').value;
+    try {
+        const res = await fetch('/tg/login/password', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password })
+        });
+        const data = await res.json();
+        if (data.error) { tgSetStatus('⛔ ' + data.error, true); return; }
+        tgSetStatus('در حال بررسی رمز...');
+    } catch (e) { tgSetStatus('⛔ ' + e.message, true); }
+}
+
+// ---- Telegram login reCAPTCHA handling ----
+let tgCaptchaWidgetId = null;
+let tgCaptchaSitekey = null;
+let tgRecaptchaLoading = false;
+
+// Loads Google's reCAPTCHA script on demand and resolves once grecaptcha.render
+// is available.
+function tgLoadRecaptcha() {
+    return new Promise((resolve, reject) => {
+        if (window.grecaptcha && window.grecaptcha.render) return resolve();
+        const waitReady = () => {
+            const iv = setInterval(() => {
+                if (window.grecaptcha && window.grecaptcha.render) { clearInterval(iv); resolve(); }
+            }, 100);
+            setTimeout(() => { clearInterval(iv); if (!(window.grecaptcha && window.grecaptcha.render)) reject(new Error('reCAPTCHA load timeout')); }, 15000);
+        };
+        if (tgRecaptchaLoading) return waitReady();
+        tgRecaptchaLoading = true;
+        const s = document.createElement('script');
+        s.src = 'https://www.google.com/recaptcha/api.js?render=explicit';
+        s.async = true; s.defer = true;
+        s.onload = waitReady;
+        s.onerror = () => reject(new Error('failed to load reCAPTCHA script'));
+        document.head.appendChild(s);
+    });
+}
+
+// Renders the reCAPTCHA widget for the given Telegram site key. On solve, the
+// token is posted back to the server which retries send-code with it.
+async function tgRenderCaptcha(sitekey) {
+    if (!sitekey || tgCaptchaSitekey === sitekey) return; // already rendered for this key
+    try {
+        await tgLoadRecaptcha();
+    } catch (e) {
+        tgSetStatus('⛔ بارگذاری reCAPTCHA ناموفق بود (احتمالاً دسترسی به گوگل مسدود است). با VPN/پراکسی روی مرورگر دوباره تلاش کنید.', true);
+        return;
+    }
+    const container = document.getElementById('tgCaptcha');
+    container.innerHTML = '';
+    try {
+        tgCaptchaWidgetId = window.grecaptcha.render(container, {
+            sitekey: sitekey,
+            callback: tgSubmitCaptcha
+        });
+        tgCaptchaSitekey = sitekey;
+    } catch (e) {
+        tgSetStatus('⛔ نمایش reCAPTCHA ناموفق بود: ' + e.message, true);
+    }
+}
+
+async function tgSubmitCaptcha(token) {
+    if (!token) return;
+    tgSetStatus('در حال ارسال تأیید امنیتی...');
+    try {
+        const res = await fetch('/tg/login/captcha', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token })
+        });
+        const data = await res.json();
+        if (data.error) { tgSetStatus('⛔ ' + data.error, true); return; }
+        tgSetStatus('تأیید امنیتی ارسال شد. در حال ارسال کد...');
+    } catch (e) { tgSetStatus('⛔ ' + e.message, true); }
+}
+
+async function tgLogout() {
+    try {
+        await fetch('/tg/logout', { method: 'POST' });
+        tgSetStatus('از حساب خارج شدید. session حذف شد.');
+        const loginBtn = document.getElementById('tgLoginBtn');
+        if (loginBtn) loginBtn.innerText = 'ورود';
+        log('Telegram session removed.');
+    } catch (e) { tgSetStatus('⛔ ' + e.message, true); }
+}
+
+async function fetchViaTelegram() {
     const t = translations[currentLang];
-    const btn = document.getElementById('fetchBtn');
-    const raw = document.getElementById('inputChannels').value;
+    const creds = tgProxyCreds();
+    if (!creds) return showToast('⚠️ لینک پراکسی MTProto سالم را وارد کنید.', true);
 
-    const channels = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    const chEl = document.getElementById('inputChannels');
+    const channels = dedupeChannels(chEl.value);
     if (channels.length === 0) return showToast(t.toastNoChannels, true);
+    // Write the de-duplicated list back and persist it for next time.
+    chEl.value = channels.join('\n');
+    saveChannels();
 
-    const proxy = document.getElementById('inputProxyUrl').value.trim();
-    localStorage.setItem('fetchProxy', proxy);
+    // Remember the MTProto proxy link so it survives reloads.
+    localStorage.setItem('fetchProxy', document.getElementById('tgProxyLink').value.trim());
 
+    // How many (newest) proxies to take from each channel.
+    let perChannel = parseInt(document.getElementById('tgPerChannel').value, 10);
+    if (isNaN(perChannel) || perChannel < 1) perChannel = 10;
+    if (perChannel > 100) perChannel = 100;
+    localStorage.setItem('tgPerChannel', perChannel);
+
+    const btn = document.getElementById('fetchBtn');
     btn.disabled = true;
     btn.innerText = t.fetchingBtn;
-    log(`Fetching proxies from ${channels.length} channel(s)${proxy ? ' via proxy' : ''}...`);
+    tgSetStatus('در حال دریافت از طریق تلگرام...');
+    log(`Fetching up to ${perChannel} newest proxies from ${channels.length} channel(s) via Telegram...`);
 
     try {
-        const response = await fetch('/fetch-channels', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channels, proxy })
+        const res = await fetch('/fetch-channels-tg', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channels, proxy: creds, limit: perChannel })
         });
-        if (!response.ok) throw new Error('Server error ' + response.status);
-
-        const data = await response.json();
+        const data = await res.json();
         const links = data.links || [];
 
         if (data.errors && data.errors.length) {
-            data.errors.forEach(e => log(`Channel error: ${e}`, true));
+            data.errors.forEach(e => log(`TG channel error: ${e}`, true));
         }
-
         if (links.length === 0) {
-            // Distinguish "couldn't reach channels" from "channels had no proxies"
-            if (data.errors && data.errors.length >= channels.length) {
-                showToast(t.toastFetchError, true);
-                log(`All ${channels.length} channel(s) failed. First error: ${data.errors[0]}`, true);
-            } else if (data.errors && data.errors.length) {
-                showToast(t.toastFetchError, true);
-                log(`Some channels failed, none returned proxies. First error: ${data.errors[0]}`, true);
-            } else {
-                showToast(t.toastFetchNone, true);
-                log('Channels reachable but contained no proxy links.');
-            }
+            showToast(t.toastFetchNone, true);
+            tgSetStatus('چیزی دریافت نشد.' + (data.errors && data.errors.length ? ' ' + data.errors[0] : ''), true);
             return;
         }
 
-        // Merge into the input textarea, de-duplicating against existing lines
         const input = document.getElementById('inputProxies');
         const existing = input.value.split('\n').map(s => s.trim()).filter(Boolean);
         const seen = new Set(existing);
         const added = [];
         for (const l of links) {
-            if (!seen.has(l)) {
-                seen.add(l);
-                added.push(l);
-            }
+            if (!seen.has(l)) { seen.add(l); added.push(l); }
         }
-        const merged = existing.concat(added);
-        input.value = merged.join('\n');
-
-        log(`Fetched ${links.length} proxies (${added.length} new) from channels.`);
+        input.value = existing.concat(added).join('\n');
+        log(`Fetched ${links.length} proxies (${added.length} new) via Telegram.`);
         showToast(t.toastFetched.replace('{n}', added.length));
+        tgSetStatus(`✅ ${added.length} پراکسی جدید دریافت شد.`);
     } catch (e) {
-        log(`FETCH ERROR: ${e.message}`, true);
+        log(`TG FETCH ERROR: ${e.message}`, true);
         showToast(t.toastFetchError, true);
+        tgSetStatus('⛔ ' + e.message, true);
     } finally {
         btn.disabled = false;
         btn.innerText = t.fetchBtn;
@@ -740,6 +993,9 @@ function exportResults(format) {
     URL.revokeObjectURL(url);
     showToast(translations[currentLang].toastExported || 'Exported!');
 }
+
+// Resume any saved Telegram session/credentials on startup.
+tgResumeSession();
 
 const soundCheck = document.getElementById('soundCheck');
 if (soundCheck) {
