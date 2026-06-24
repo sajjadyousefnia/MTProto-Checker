@@ -616,6 +616,9 @@ async function fetchViaTelegram() {
         const data = await res.json();
         const links = data.links || [];
 
+        if (data.notes && data.notes.length) {
+            data.notes.forEach(n => log(`📊 ${n}`));
+        }
         if (data.errors && data.errors.length) {
             data.errors.forEach(e => log(`TG channel error: ${e}`, true));
         }

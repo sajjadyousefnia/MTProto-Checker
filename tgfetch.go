@@ -36,8 +36,8 @@ import (
 const (
 	perChannelMax   = 1000 // hard cap on proxies taken per channel
 	historyPageSize = 100  // Telegram's max messages per getHistory call
-	maxScanMessages = 1500 // safety cap on messages paged through per channel
-	tgFetchTimeout  = 120 * time.Second
+	maxScanMessages = 3000 // safety cap on messages paged through per channel
+	tgFetchTimeout  = 180 * time.Second
 )
 
 // tgConfigDir returns the per-user directory holding the session and app
@@ -562,14 +562,48 @@ func extractProxyLinksFromMessage(msg *tg.Message) []string {
 	return out
 }
 
+// channelStats reports how a channel scan went, for surfacing to the user.
+type channelStats struct {
+	found   int
+	scanned int
+	stop    string // quota | end | scan-cap | flood | error
+}
+
+// getHistoryFloodWait calls MessagesGetHistory, transparently waiting out
+// FLOOD_WAIT (RPC 420) responses up to a few times so deep pagination isn't
+// aborted by Telegram's rate limiter.
+func getHistoryFloodWait(ctx context.Context, api *tg.Client, req *tg.MessagesGetHistoryRequest) (tg.MessagesMessagesClass, error) {
+	for attempt := 0; attempt < 4; attempt++ {
+		hist, err := api.MessagesGetHistory(ctx, req)
+		if err == nil {
+			return hist, nil
+		}
+		rpcErr, ok := tgerr.As(err)
+		if !ok || !rpcErr.IsCode(420) {
+			return nil, err
+		}
+		wait := time.Duration(rpcErr.Argument)*time.Second + time.Second
+		if wait > 45*time.Second {
+			wait = 45 * time.Second
+		}
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, errors.New("FLOOD_WAIT: retries exhausted")
+}
+
 // fetchChannelViaTG returns up to maxProxies proxy links from a channel,
 // newest first (maxProxies <= 0 means "as many as possible"). Telegram caps a
 // single getHistory to 100 messages, so we page backwards with OffsetID until
 // the quota is filled, the channel runs out, or the scan safety cap is hit.
-func fetchChannelViaTG(ctx context.Context, api *tg.Client, channel string, maxProxies int) ([]string, error) {
+func fetchChannelViaTG(ctx context.Context, api *tg.Client, channel string, maxProxies int) ([]string, channelStats, error) {
+	var stats channelStats
 	resolved, err := api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: channel})
 	if err != nil {
-		return nil, errors.Wrap(err, "resolve username")
+		return nil, stats, errors.Wrap(err, "resolve username")
 	}
 
 	var peer tg.InputPeerClass
@@ -589,36 +623,39 @@ func fetchChannelViaTG(ctx context.Context, api *tg.Client, channel string, maxP
 		}
 	}
 	if peer == nil {
-		return nil, errors.New("not a channel/group, or no access")
+		return nil, stats, errors.New("not a channel/group, or no access")
 	}
 
 	var links []string
 	seen := make(map[string]struct{})
 	offsetID := 0
-	scanned := 0
+	stats.stop = "scan-cap"
 
-	for scanned < maxScanMessages {
-		hist, err := api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+	for stats.scanned < maxScanMessages {
+		hist, err := getHistoryFloodWait(ctx, api, &tg.MessagesGetHistoryRequest{
 			Peer:     peer,
 			Limit:    historyPageSize,
 			OffsetID: offsetID,
 		})
 		if err != nil {
 			if len(links) > 0 {
+				stats.stop = "flood/error: " + err.Error()
 				break // keep what we already gathered instead of failing the channel
 			}
-			return nil, errors.Wrap(err, "get history")
+			return nil, stats, errors.Wrap(err, "get history")
 		}
 		modified, ok := hist.AsModified()
 		if !ok {
 			if len(links) > 0 {
+				stats.stop = "non-modified history"
 				break
 			}
-			return nil, errors.New("unexpected history response")
+			return nil, stats, errors.New("unexpected history response")
 		}
 
 		msgs := modified.GetMessages()
 		if len(msgs) == 0 {
+			stats.stop = "end"
 			break
 		}
 
@@ -627,7 +664,7 @@ func fetchChannelViaTG(ctx context.Context, api *tg.Client, channel string, maxP
 			if id := m.GetID(); id > 0 && (minID == 0 || id < minID) {
 				minID = id
 			}
-			scanned++
+			stats.scanned++
 			msg, ok := m.(*tg.Message)
 			if !ok {
 				continue
@@ -639,17 +676,21 @@ func fetchChannelViaTG(ctx context.Context, api *tg.Client, channel string, maxP
 				seen[l] = struct{}{}
 				links = append(links, l)
 				if maxProxies > 0 && len(links) >= maxProxies {
-					return links, nil
+					stats.found = len(links)
+					stats.stop = "quota"
+					return links, stats, nil
 				}
 			}
 		}
 
 		if len(msgs) < historyPageSize || minID == 0 {
+			stats.stop = "end"
 			break // reached the start of the channel
 		}
 		offsetID = minID // next page: messages older than the oldest in this batch
 	}
-	return links, nil
+	stats.found = len(links)
+	return links, stats, nil
 }
 
 type FetchTGRequest struct {
@@ -725,19 +766,25 @@ func fetchChannelsViaTelegram(ctx context.Context, req FetchTGRequest) (FetchCha
 
 		api := client.API()
 		for _, ch := range channels {
-			// Telegram rate-limits resolve/getHistory; small gap between channels.
-			links, err := fetchChannelViaTG(ctx, api, ch, perChannel)
+			links, stats, err := fetchChannelViaTG(ctx, api, ch, perChannel)
 			if err != nil {
 				resp.Errors = append(resp.Errors, fmt.Sprintf("%s: %v", ch, err))
 				continue
 			}
+			added := 0
 			for _, l := range links {
 				if _, ok := seenLink[l]; ok {
 					continue
 				}
 				seenLink[l] = struct{}{}
 				resp.Links = append(resp.Links, l)
+				added++
 			}
+			// Per-channel diagnostics so the user can see the real bottleneck
+			// (e.g. ran out of messages vs. hit the scan cap vs. flood wait).
+			resp.Notes = append(resp.Notes, fmt.Sprintf(
+				"%s: %d new (%d found in %d msgs scanned, stop=%s)",
+				ch, added, stats.found, stats.scanned, stats.stop))
 		}
 		return nil
 	})

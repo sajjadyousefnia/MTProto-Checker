@@ -174,6 +174,7 @@ type FetchChannelsResponse struct {
 	Links  []string `json:"links"`
 	Count  int      `json:"count"`
 	Errors []string `json:"errors,omitempty"`
+	Notes  []string `json:"notes,omitempty"`
 }
 
 const maxChannels = 30
