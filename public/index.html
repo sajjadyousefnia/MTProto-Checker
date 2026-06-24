@@ -58,8 +58,8 @@
             <textarea id="inputChannels" class="channels-input" placeholder="MTProxiess&#10;@DirectProxy&#10;https://t.me/s/socks5_telegram"></textarea>
             <input type="text" id="tgProxyLink" class="proxy-input" placeholder="پراکسی MTProto سالم: tg://proxy?server=...&port=...&secret=..." dir="ltr">
             <div class="tg-limit-row">
-                <label for="tgPerChannel" data-i18n="perChannelLabel">تعداد پراکسی از هر کانال (جدیدترین‌ها):</label>
-                <input type="number" id="tgPerChannel" min="1" max="100" value="10" dir="ltr">
+                <label for="tgPerChannel" data-i18n="perChannelLabel">تعداد پراکسی از هر کانال (۰ = همه، جدیدترین‌ها):</label>
+                <input type="number" id="tgPerChannel" min="0" max="1000" value="0" dir="ltr">
             </div>
             <div class="btn-row">
                 <button class="btn-fetch" id="fetchBtn" onclick="fetchViaTelegram()" data-i18n="fetchBtn">⬇ دریافت پراکسی از کانال‌ها</button>

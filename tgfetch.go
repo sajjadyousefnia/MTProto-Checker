@@ -34,10 +34,10 @@ import (
 // ----------------------------------------------------------------------------
 
 const (
-	perChannelDefault   = 10  // proxies taken per channel when unspecified
-	perChannelMax       = 100 // hard cap on proxies taken per channel
-	historyScanMessages = 100 // recent messages scanned to fill the quota
-	tgFetchTimeout      = 90 * time.Second
+	perChannelMax   = 1000 // hard cap on proxies taken per channel
+	historyPageSize = 100  // Telegram's max messages per getHistory call
+	maxScanMessages = 1500 // safety cap on messages paged through per channel
+	tgFetchTimeout  = 120 * time.Second
 )
 
 // tgConfigDir returns the per-user directory holding the session and app
@@ -533,8 +533,9 @@ func extractProxyLinksFromMessage(msg *tg.Message) []string {
 }
 
 // fetchChannelViaTG returns up to maxProxies proxy links from a channel,
-// taking the most recent ones first (Telegram history is newest-first). It
-// scans message history until the quota is filled or the messages run out.
+// newest first (maxProxies <= 0 means "as many as possible"). Telegram caps a
+// single getHistory to 100 messages, so we page backwards with OffsetID until
+// the quota is filled, the channel runs out, or the scan safety cap is hit.
 func fetchChannelViaTG(ctx context.Context, api *tg.Client, channel string, maxProxies int) ([]string, error) {
 	resolved, err := api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: channel})
 	if err != nil {
@@ -561,35 +562,62 @@ func fetchChannelViaTG(ctx context.Context, api *tg.Client, channel string, maxP
 		return nil, errors.New("not a channel/group, or no access")
 	}
 
-	hist, err := api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
-		Peer:  peer,
-		Limit: historyScanMessages,
-	})
-	if err != nil {
-		return nil, errors.Wrap(err, "get history")
-	}
-	modified, ok := hist.AsModified()
-	if !ok {
-		return nil, errors.New("unexpected history response")
-	}
-
 	var links []string
 	seen := make(map[string]struct{})
-	for _, m := range modified.GetMessages() { // newest first
-		msg, ok := m.(*tg.Message)
-		if !ok {
-			continue
+	offsetID := 0
+	scanned := 0
+
+	for scanned < maxScanMessages {
+		hist, err := api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+			Peer:     peer,
+			Limit:    historyPageSize,
+			OffsetID: offsetID,
+		})
+		if err != nil {
+			if len(links) > 0 {
+				break // keep what we already gathered instead of failing the channel
+			}
+			return nil, errors.Wrap(err, "get history")
 		}
-		for _, l := range extractProxyLinksFromMessage(msg) {
-			if _, dup := seen[l]; dup {
+		modified, ok := hist.AsModified()
+		if !ok {
+			if len(links) > 0 {
+				break
+			}
+			return nil, errors.New("unexpected history response")
+		}
+
+		msgs := modified.GetMessages()
+		if len(msgs) == 0 {
+			break
+		}
+
+		minID := 0
+		for _, m := range msgs { // newest first
+			if id := m.GetID(); id > 0 && (minID == 0 || id < minID) {
+				minID = id
+			}
+			scanned++
+			msg, ok := m.(*tg.Message)
+			if !ok {
 				continue
 			}
-			seen[l] = struct{}{}
-			links = append(links, l)
-			if maxProxies > 0 && len(links) >= maxProxies {
-				return links, nil
+			for _, l := range extractProxyLinksFromMessage(msg) {
+				if _, dup := seen[l]; dup {
+					continue
+				}
+				seen[l] = struct{}{}
+				links = append(links, l)
+				if maxProxies > 0 && len(links) >= maxProxies {
+					return links, nil
+				}
 			}
 		}
+
+		if len(msgs) < historyPageSize || minID == 0 {
+			break // reached the start of the channel
+		}
+		offsetID = minID // next page: messages older than the oldest in this batch
 	}
 	return links, nil
 }
@@ -603,9 +631,11 @@ type FetchTGRequest struct {
 // fetchChannelsViaTelegram opens one authenticated client (through the given
 // MTProto proxy) and pulls proxy links from each channel's recent history.
 func fetchChannelsViaTelegram(ctx context.Context, req FetchTGRequest) (FetchChannelsResponse, error) {
+	// perChannel is the max proxies taken from each channel; <= 0 means "all"
+	// (bounded by the message-scan safety cap), > perChannelMax is clamped.
 	perChannel := req.Limit
-	if perChannel <= 0 {
-		perChannel = perChannelDefault
+	if perChannel < 0 {
+		perChannel = 0
 	}
 	if perChannel > perChannelMax {
 		perChannel = perChannelMax

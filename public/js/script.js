@@ -31,7 +31,7 @@ const translations = {
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
         proxyPlaceholder: "پراکسی برای دور زدن فیلترینگ (اختیاری): socks5://127.0.0.1:10808",
         fetchBtn: "⬇ دریافت پراکسی از کانال‌ها",
-        perChannelLabel: "تعداد پراکسی از هر کانال (جدیدترین‌ها):",
+        perChannelLabel: "تعداد پراکسی از هر کانال (۰ = همه، جدیدترین‌ها):",
         fetchingBtn: "⏳ در حال دریافت...",
         toastNoChannels: "⚠️ هیچ کانالی وارد نشده است!",
         toastFetched: "✅ {n} پراکسی از کانال‌ها دریافت شد!",
@@ -70,7 +70,7 @@ const translations = {
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
         proxyPlaceholder: "Proxy to bypass filtering (optional): socks5://127.0.0.1:10808",
         fetchBtn: "⬇ Fetch proxies from channels",
-        perChannelLabel: "Proxies per channel (newest):",
+        perChannelLabel: "Proxies per channel (0 = all, newest):",
         fetchingBtn: "⏳ Fetching...",
         toastNoChannels: "⚠️ No channels entered!",
         toastFetched: "✅ Fetched {n} proxies from channels!",
@@ -109,7 +109,7 @@ const translations = {
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
         proxyPlaceholder: "Прокси для обхода блокировки (опц.): socks5://127.0.0.1:10808",
         fetchBtn: "⬇ Получить прокси из каналов",
-        perChannelLabel: "Прокси с канала (новейшие):",
+        perChannelLabel: "Прокси с канала (0 = все, новейшие):",
         fetchingBtn: "⏳ Загрузка...",
         toastNoChannels: "⚠️ Каналы не указаны!",
         toastFetched: "✅ Получено {n} прокси из каналов!",
@@ -148,7 +148,7 @@ const translations = {
         channelsPlaceholder: "MTProxiess\n@DirectProxy\nhttps://t.me/s/socks5_telegram",
         proxyPlaceholder: "用于绕过封锁的代理（可选）: socks5://127.0.0.1:10808",
         fetchBtn: "⬇ 从频道获取代理",
-        perChannelLabel: "每个频道的代理数（最新）:",
+        perChannelLabel: "每个频道的代理数（0 = 全部，最新）:",
         fetchingBtn: "⏳ 获取中...",
         toastNoChannels: "⚠️ 未输入频道!",
         toastFetched: "✅ 已从频道获取 {n} 个代理!",
@@ -596,17 +596,17 @@ async function fetchViaTelegram() {
     // Remember the MTProto proxy link so it survives reloads.
     localStorage.setItem('fetchProxy', document.getElementById('tgProxyLink').value.trim());
 
-    // How many (newest) proxies to take from each channel.
+    // How many (newest) proxies to take from each channel; 0 = all.
     let perChannel = parseInt(document.getElementById('tgPerChannel').value, 10);
-    if (isNaN(perChannel) || perChannel < 1) perChannel = 10;
-    if (perChannel > 100) perChannel = 100;
+    if (isNaN(perChannel) || perChannel < 0) perChannel = 0;
+    if (perChannel > 1000) perChannel = 1000;
     localStorage.setItem('tgPerChannel', perChannel);
 
     const btn = document.getElementById('fetchBtn');
     btn.disabled = true;
     btn.innerText = t.fetchingBtn;
     tgSetStatus('در حال دریافت از طریق تلگرام...');
-    log(`Fetching up to ${perChannel} newest proxies from ${channels.length} channel(s) via Telegram...`);
+    log(`Fetching ${perChannel === 0 ? 'all' : 'up to ' + perChannel} newest proxies from ${channels.length} channel(s) via Telegram...`);
 
     try {
         const res = await fetch('/fetch-channels-tg', {
