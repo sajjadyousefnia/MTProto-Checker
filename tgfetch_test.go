@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/gotd/td/tg"
 )
 
 func contains(links []string, want string) bool {
@@ -83,5 +85,30 @@ tg://proxy?server=203.22.241.9&port=80&secret=8080`
 	}
 	if links[0] != "tg://proxy?server=1.2.3.4&port=443&secret=dd104462821249bd7ac519130220c25d09" {
 		t.Errorf("unexpected link: %v", links)
+	}
+}
+
+func TestExtractFromMessage_InlineButtonAndWebpage(t *testing.T) {
+	msg := &tg.Message{Message: "🚀 ｎｅｗ ｐｒｏｘｙ 🚀\nServer: unknown"}
+	// Proxy hidden behind a "Connect" glass button (reply markup).
+	msg.SetReplyMarkup(&tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{{
+		Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonURL{Text: "🔗 Connect", URL: "https://t.me/proxy?server=5.75.155.1&port=443&secret=ee1603010200010001fc030386e24c3add626973636f7474692e79656b74616e65742e636f6d"},
+		},
+	}}})
+	// Another proxy in an attached link preview.
+	msg.SetMedia(&tg.MessageMediaWebPage{Webpage: &tg.WebPage{
+		URL: "tg://proxy?server=1.2.3.4&port=85&secret=FgMBAgABAAH8AxOG4kw63Q",
+	}})
+
+	links := extractProxyLinksFromMessage(msg)
+	wants := []string{
+		"tg://proxy?server=5.75.155.1&port=443&secret=ee1603010200010001fc030386e24c3add626973636f7474692e79656b74616e65742e636f6d",
+		"tg://proxy?server=1.2.3.4&port=85&secret=FgMBAgABAAH8AxOG4kw63Q",
+	}
+	for _, w := range wants {
+		if !contains(links, w) {
+			t.Errorf("missing %q\n got: %v", w, links)
+		}
 	}
 }

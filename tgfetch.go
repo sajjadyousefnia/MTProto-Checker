@@ -518,17 +518,47 @@ func extractProxyLinksFromText(text string) []string {
 	return collectProxyLinks(text, make(map[string]struct{}), nil)
 }
 
-// extractProxyLinksFromMessage scans the raw message text and any text-URL
-// entities (proxy links are often hidden behind formatted/button links where
-// the visible text differs from the underlying URL).
+// extractProxyLinksFromMessage scans every place a channel can stash a proxy
+// link: the raw text, formatted hyperlinks (text-URL entities), inline glass
+// buttons (reply markup), and the attached link/webpage preview.
 func extractProxyLinksFromMessage(msg *tg.Message) []string {
 	seen := make(map[string]struct{})
 	out := collectProxyLinks(msg.Message, seen, nil)
+
+	// Hyperlinks where the visible text differs from the underlying URL.
 	for _, e := range msg.Entities {
 		if tu, ok := e.(*tg.MessageEntityTextURL); ok {
 			out = collectProxyLinks(tu.URL, seen, out)
 		}
 	}
+
+	// Inline keyboard buttons — proxy channels very often hide the link behind
+	// a "Connect" glass button rather than putting it in the message text.
+	if rm, ok := msg.GetReplyMarkup(); ok {
+		if inline, ok := rm.(*tg.ReplyInlineMarkup); ok {
+			for _, row := range inline.Rows {
+				for _, btn := range row.Buttons {
+					switch b := btn.(type) {
+					case *tg.KeyboardButtonURL:
+						out = collectProxyLinks(b.URL, seen, out)
+					case *tg.KeyboardButtonURLAuth:
+						out = collectProxyLinks(b.URL, seen, out)
+					}
+				}
+			}
+		}
+	}
+
+	// Link/webpage preview attached to the message.
+	if media, ok := msg.GetMedia(); ok {
+		if wp, ok := media.(*tg.MessageMediaWebPage); ok {
+			if page, ok := wp.Webpage.(*tg.WebPage); ok {
+				out = collectProxyLinks(page.URL, seen, out)
+				out = collectProxyLinks(page.DisplayURL, seen, out)
+			}
+		}
+	}
+
 	return out
 }
 
