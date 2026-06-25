@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,10 +16,11 @@ import (
 	"time"
 
 	"github.com/go-faster/errors"
+	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/telegram/dcs"
-	"github.com/gotd/td/session"
+	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 )
@@ -34,10 +36,12 @@ import (
 // ----------------------------------------------------------------------------
 
 const (
-	perChannelMax   = 1000 // hard cap on proxies taken per channel
-	historyPageSize = 100  // Telegram's max messages per getHistory call
-	maxScanMessages = 3000 // safety cap on messages paged through per channel
-	tgFetchTimeout  = 180 * time.Second
+	perChannelMax     = 1000    // hard cap on proxies taken per channel
+	historyPageSize   = 100     // Telegram's max messages per getHistory call
+	maxScanMessages   = 3000    // safety cap on messages paged through per channel
+	maxDocsPerChannel = 30      // text attachments downloaded+parsed per channel
+	maxDocBytes       = 4 << 20 // skip attachments larger than 4 MiB
+	tgFetchTimeout    = 180 * time.Second
 )
 
 // tgConfigDir returns the per-user directory holding the session and app
@@ -595,6 +599,53 @@ func getHistoryFloodWait(ctx context.Context, api *tg.Client, req *tg.MessagesGe
 	return nil, errors.New("FLOOD_WAIT: retries exhausted")
 }
 
+// downloadTextDocument returns the text of a small text/plain (or *.txt)
+// attachment on the message, if any, so proxy lists posted as files are not
+// missed. Returns false for non-text, oversized, or undownloadable media.
+func downloadTextDocument(ctx context.Context, api *tg.Client, msg *tg.Message) (string, bool) {
+	media, ok := msg.GetMedia()
+	if !ok {
+		return "", false
+	}
+	md, ok := media.(*tg.MessageMediaDocument)
+	if !ok {
+		return "", false
+	}
+	docClass, ok := md.GetDocument()
+	if !ok {
+		return "", false
+	}
+	doc, ok := docClass.(*tg.Document)
+	if !ok || doc.Size > maxDocBytes {
+		return "", false
+	}
+
+	isText := strings.HasPrefix(doc.MimeType, "text/")
+	if !isText {
+		for _, a := range doc.Attributes {
+			if fn, ok := a.(*tg.DocumentAttributeFilename); ok {
+				if strings.HasSuffix(strings.ToLower(fn.FileName), ".txt") {
+					isText = true
+				}
+			}
+		}
+	}
+	if !isText {
+		return "", false
+	}
+
+	loc := &tg.InputDocumentFileLocation{
+		ID:            doc.ID,
+		AccessHash:    doc.AccessHash,
+		FileReference: doc.FileReference,
+	}
+	var buf bytes.Buffer
+	if _, err := downloader.NewDownloader().Download(api, loc).Stream(ctx, &buf); err != nil {
+		return "", false
+	}
+	return buf.String(), true
+}
+
 // fetchChannelViaTG returns up to maxProxies proxy links from a channel,
 // newest first (maxProxies <= 0 means "as many as possible"). Telegram caps a
 // single getHistory to 100 messages, so we page backwards with OffsetID until
@@ -629,7 +680,18 @@ func fetchChannelViaTG(ctx context.Context, api *tg.Client, channel string, maxP
 	var links []string
 	seen := make(map[string]struct{})
 	offsetID := 0
+	docsDownloaded := 0
 	stats.stop = "scan-cap"
+
+	// addLink records a unique proxy; returns true once the quota is reached.
+	addLink := func(l string) bool {
+		if _, dup := seen[l]; dup {
+			return false
+		}
+		seen[l] = struct{}{}
+		links = append(links, l)
+		return maxProxies > 0 && len(links) >= maxProxies
+	}
 
 	for stats.scanned < maxScanMessages {
 		hist, err := getHistoryFloodWait(ctx, api, &tg.MessagesGetHistoryRequest{
@@ -670,15 +732,24 @@ func fetchChannelViaTG(ctx context.Context, api *tg.Client, channel string, maxP
 				continue
 			}
 			for _, l := range extractProxyLinksFromMessage(msg) {
-				if _, dup := seen[l]; dup {
-					continue
-				}
-				seen[l] = struct{}{}
-				links = append(links, l)
-				if maxProxies > 0 && len(links) >= maxProxies {
+				if addLink(l) {
 					stats.found = len(links)
 					stats.stop = "quota"
 					return links, stats, nil
+				}
+			}
+			// Some channels drop a .txt list as a file attachment; download and
+			// parse it too (bounded per channel to keep fetches fast).
+			if docsDownloaded < maxDocsPerChannel {
+				if text, ok := downloadTextDocument(ctx, api, msg); ok {
+					docsDownloaded++
+					for _, l := range extractProxyLinksFromText(text) {
+						if addLink(l) {
+							stats.found = len(links)
+							stats.stop = "quota"
+							return links, stats, nil
+						}
+					}
 				}
 			}
 		}
