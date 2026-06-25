@@ -814,7 +814,9 @@ async function startCheck() {
             return;
         }
 
-        log(`Parsed ${validLinks.length} valid links. Skipped ${skippedCount} bad links.`);
+        log(`Parsed ${validLinks.length} valid links.` + (skippedCount > 0
+            ? ` Skipped ${skippedCount} decoy/invalid proxies (padded or over-long secrets — they never connect).`
+            : ''));
 
         workingProxies = [];
         document.getElementById('outputProxies').value = '';
