@@ -38,10 +38,10 @@ import (
 const (
 	perChannelMax     = 1000    // hard cap on proxies taken per channel
 	historyPageSize   = 100     // Telegram's max messages per getHistory call
-	maxScanMessages   = 3000    // safety cap on messages paged through per channel
+	maxScanMessages   = 15000   // safety cap on messages paged through per channel
 	maxDocsPerChannel = 30      // text attachments downloaded+parsed per channel
 	maxDocBytes       = 4 << 20 // skip attachments larger than 4 MiB
-	tgFetchTimeout    = 180 * time.Second
+	tgFetchTimeout    = 280 * time.Second
 )
 
 // tgConfigDir returns the per-user directory holding the session and app
@@ -568,9 +568,10 @@ func extractProxyLinksFromMessage(msg *tg.Message) []string {
 
 // channelStats reports how a channel scan went, for surfacing to the user.
 type channelStats struct {
-	found   int
-	scanned int
-	stop    string // quota | end | scan-cap | flood | error
+	found     int
+	scanned   int
+	withProxy int    // messages that carried at least one proxy link
+	stop      string // quota | end | scan-cap | flood | error
 }
 
 // getHistoryFloodWait calls MessagesGetHistory, transparently waiting out
@@ -731,11 +732,14 @@ func fetchChannelViaTG(ctx context.Context, api *tg.Client, channel string, maxP
 			if !ok {
 				continue
 			}
-			for _, l := range extractProxyLinksFromMessage(msg) {
-				if addLink(l) {
-					stats.found = len(links)
-					stats.stop = "quota"
-					return links, stats, nil
+			if msgLinks := extractProxyLinksFromMessage(msg); len(msgLinks) > 0 {
+				stats.withProxy++
+				for _, l := range msgLinks {
+					if addLink(l) {
+						stats.found = len(links)
+						stats.stop = "quota"
+						return links, stats, nil
+					}
 				}
 			}
 			// Some channels drop a .txt list as a file attachment; download and
@@ -854,8 +858,8 @@ func fetchChannelsViaTelegram(ctx context.Context, req FetchTGRequest) (FetchCha
 			// Per-channel diagnostics so the user can see the real bottleneck
 			// (e.g. ran out of messages vs. hit the scan cap vs. flood wait).
 			resp.Notes = append(resp.Notes, fmt.Sprintf(
-				"%s: %d new (%d found in %d msgs scanned, stop=%s)",
-				ch, added, stats.found, stats.scanned, stats.stop))
+				"%s: %d new | %d unique found | %d/%d msgs had a proxy | stop=%s",
+				ch, added, stats.found, stats.withProxy, stats.scanned, stats.stop))
 		}
 		return nil
 	})
